@@ -15,11 +15,22 @@ from macholib.mach_o import LC_LOAD_WEAK_DYLIB
 from macholib.mach_o import LC_REEXPORT_DYLIB
 from macholib.mach_o import LC_RPATH
 from macholib.mach_o import get_cpu_subtype
+from macholib.ptypes import Structure
+from macholib.ptypes import p_int32
+from macholib.ptypes import p_int64
+from macholib.ptypes import p_long
+from macholib.ptypes import p_short
+from macholib.ptypes import p_uint8
+from macholib.ptypes import p_uint32
+from macholib.ptypes import p_uint64
+from macholib.ptypes import p_ulong
+from macholib.ptypes import pypackable
 from macholib.ptypes import sizeof
+
 
 T = TypeVar("T")
 
-# Maps from macholib's CPU_TYPE_NAMES entry and get_cpu_subtype output to 
+# Maps from macholib's CPU_TYPE_NAMES entry and get_cpu_subtype output to
 # what lipo would print
 LIPO_ARCH_NAMES = {
     "MC680x0": {
@@ -73,18 +84,18 @@ LIPO_ARCH_NAMES = {
         "CPU_SUBTYPE_SPARC_ALL": "sparc",
     },
     "ARM": {
-	    "CPU_SUBTYPE_ARM_ALL": "arm",
-	    "CPU_SUBTYPE_ARM_V4T": "armv4t",
-	    "CPU_SUBTYPE_ARM_V5TEJ": "armv5",
-	    "CPU_SUBTYPE_ARM_XSCALE": "xscale",
-	    "CPU_SUBTYPE_ARM_V6": "armv6",
-	    "CPU_SUBTYPE_ARM_V6M": "armv6m",
-	    "CPU_SUBTYPE_ARM_V7": "armv7",
-	    "CPU_SUBTYPE_ARM_V7F": "armv7f",
-	    "CPU_SUBTYPE_ARM_V7S": "armv7s",
-	    "CPU_SUBTYPE_ARM_V7K": "armv7k",
-	    "CPU_SUBTYPE_ARM_V7M": "armv7m",
-	    "CPU_SUBTYPE_ARM_V7EM": "armv7em",
+        "CPU_SUBTYPE_ARM_ALL": "arm",
+        "CPU_SUBTYPE_ARM_V4T": "armv4t",
+        "CPU_SUBTYPE_ARM_V5TEJ": "armv5",
+        "CPU_SUBTYPE_ARM_XSCALE": "xscale",
+        "CPU_SUBTYPE_ARM_V6": "armv6",
+        "CPU_SUBTYPE_ARM_V6M": "armv6m",
+        "CPU_SUBTYPE_ARM_V7": "armv7",
+        "CPU_SUBTYPE_ARM_V7F": "armv7f",
+        "CPU_SUBTYPE_ARM_V7S": "armv7s",
+        "CPU_SUBTYPE_ARM_V7K": "armv7k",
+        "CPU_SUBTYPE_ARM_V7M": "armv7m",
+        "CPU_SUBTYPE_ARM_V7EM": "armv7em",
     },
     "ARM64": {
         "CPU_SUBTYPE_ARM64_ALL": "arm64",
@@ -92,7 +103,7 @@ LIPO_ARCH_NAMES = {
         "CPU_SUBTYPE_ARM64E": "arm64e",
     },
     # TODO: macholib doesn't have this yet.
-	# "ARM64_32": {
+    # "ARM64_32": {
     #     "CPU_SUBTYPE_ARM64_32_V8": "arm64_32",
     # },
 }
@@ -100,13 +111,51 @@ LIPO_ARCH_NAMES = {
 
 # See https://github.com/tpoechtrager/cctools-port/blob/11c93763d7e7ce7305163341d08052374e4712de/cctools/otool/ofile_print.c#L2963-L2967
 # Note: I skipped LC_IDFVMLIB and LC_LOADFVMLIB - not sure if they're still used?
-LIBRARY_COMMANDS = [
-    LC_LOAD_DYLIB,
-    LC_LOAD_WEAK_DYLIB,
-    LC_REEXPORT_DYLIB,
-    LC_LOAD_UPWARD_DYLIB,
-    LC_LAZY_LOAD_DYLIB
-]
+LIBRARY_COMMANDS = [LC_LOAD_DYLIB, LC_LOAD_WEAK_DYLIB, LC_REEXPORT_DYLIB, LC_LOAD_UPWARD_DYLIB, LC_LAZY_LOAD_DYLIB]
+
+
+class cs_blob_index(Structure):
+    _fields_ = [
+        ("type", p_uint32),  # type of entry
+        ("offset", p_uint32),  # offset of entry
+    ]
+
+class cs_super_blob(Structure):
+    _fields_ = [
+        ("magic", p_uint32),
+        ("length", p_uint32),
+        ("count", p_uint32),
+    ]
+
+class cs_code_directory(Structure):
+    _fields_ = [
+        ("magic", p_uint32),  # magic number (CSMAGIC_CODEDIRECTORY)
+        ("length", p_uint32),  # total length of CodeDirectory blob
+        ("version", p_uint32),  # compatibility version
+        ("flags", p_uint32),  # setup and mode flags
+        ("hashoffset", p_uint32),  # offset of hash slot element at index zero
+        ("identoffset", p_uint32),  # offset of identifier string
+        ("nspecialslots", p_uint32),  # number of special hash slots
+        ("ncodeslots", p_uint32),  # number of ordinary (code) hash slots
+        ("codelimit", p_uint32),  # limit to main image signature range
+        ("hashsize", p_uint8),  # size of each hash in bytes
+        ("hashtype", p_uint8),  # type of hash (cdHashType* constants)
+        ("spare1", p_uint8),  # unused (must be zero)
+        ("pagesize", p_uint8),  # log2(page size in bytes); 0 => infinite
+        ("spare2", p_uint8),  # unused (must be zero)
+    ]
+    # followed by dynamic content as located by offset fields above
+
+
+class nlist_64(Structure):
+    _fields_ = [
+        ("n_un", n_un),
+        ("n_type", p_uint8),
+        ("n_sect", p_uint8),
+        ("n_desc", p_short),
+        ("n_value", p_int64),
+    ]
+
 
 
 def _all_arches_same_value(macho: MachO, fn: Callable[[MachOHeader], T]) -> T:
@@ -114,9 +163,7 @@ def _all_arches_same_value(macho: MachO, fn: Callable[[MachOHeader], T]) -> T:
     for header in macho.headers[1:]:
         next_val = fn(header)
         if next_val != val:
-            raise NotImplementedError(
-                "This function does not support separate values per-architecture"
-            )
+            raise NotImplementedError("This function does not support separate values per-architecture")
         val = next_val
 
     return val
@@ -197,9 +244,7 @@ def get_install_id(filename: str) -> Optional[str]:
     return _all_arches_same_value(macho, _val)
 
 
-def set_install_name(
-    filename: str, oldname: str, newname: str, ad_hoc_sign: bool = True
-) -> None:
+def set_install_name(filename: str, oldname: str, newname: str, ad_hoc_sign: bool = True) -> None:
     """Set install name `oldname` to `newname` in library filename
 
     Parameters
@@ -221,7 +266,7 @@ def set_install_name(
             lc, cmd, _ = entry
             if lc.cmd not in LIBRARY_COMMANDS:
                 continue
-            
+
             name = lc_str_value(cmd.name, entry).decode("utf-8")
             if name == oldname:
                 header.rewriteDataForCommand(idx, newname.encode("utf-8"))
@@ -295,7 +340,7 @@ def get_rpaths(filename: str) -> Tuple[str, ...]:
             lc, cmd, _ = entry
             if lc.cmd != LC_RPATH:
                 continue
-            
+
             # cmd.path is type lc_str.
             results.append(lc_str_value(cmd.path, entry).decode("utf-8"))
 
@@ -349,7 +394,8 @@ def replace_signature(filename: str, identity: str) -> None:
     raise NotImplementedError
 
 
-def _do_validate_signature(filename: str)
+def _do_validate_signature(filename: str) -> bool:
+    pass
 
 
 def validate_signature(filename: str) -> None:
