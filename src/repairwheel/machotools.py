@@ -8,6 +8,7 @@ from macholib.MachO import MachO
 from macholib.MachO import MachOHeader
 from macholib.MachO import lc_str_value
 from macholib.mach_o import CPU_TYPE_NAMES
+from macholib.mach_o import LC_CODE_SIGNATURE
 from macholib.mach_o import LC_LAZY_LOAD_DYLIB
 from macholib.mach_o import LC_LOAD_DYLIB
 from macholib.mach_o import LC_LOAD_UPWARD_DYLIB
@@ -26,6 +27,7 @@ from macholib.ptypes import p_uint64
 from macholib.ptypes import p_ulong
 from macholib.ptypes import pypackable
 from macholib.ptypes import sizeof
+from macholib.util import fileview
 
 
 T = TypeVar("T")
@@ -394,8 +396,28 @@ def replace_signature(filename: str, identity: str) -> None:
     raise NotImplementedError
 
 
+def _do_validate_thin_entry(filename: str, header: MachOHeader) -> bool:
+    for entry in header.commands:
+        lc, cmd, data = entry
+        if lc.cmd == LC_CODE_SIGNATURE:
+            break
+    else:
+        # No code signature
+        return True
+
+    
+
+    with open(filename, "rb") as fh:
+        fh = fileview(fh, header.offset, header.size)
+
+
 def _do_validate_signature(filename: str) -> bool:
-    pass
+    macho = MachO(filename)
+    for header in macho.headers:
+        if not _do_validate_thin_entry(filename, header):
+            return False
+    
+    return True
 
 
 def validate_signature(filename: str) -> None:
