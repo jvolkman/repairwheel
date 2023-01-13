@@ -1,4 +1,4 @@
-import os
+import logging
 from typing import Callable
 from typing import FrozenSet
 from typing import Optional
@@ -8,7 +8,6 @@ from macholib.MachO import MachO
 from macholib.MachO import MachOHeader
 from macholib.MachO import lc_str_value
 from macholib.mach_o import CPU_TYPE_NAMES
-from macholib.mach_o import LC_CODE_SIGNATURE
 from macholib.mach_o import LC_LAZY_LOAD_DYLIB
 from macholib.mach_o import LC_LOAD_DYLIB
 from macholib.mach_o import LC_LOAD_UPWARD_DYLIB
@@ -16,20 +15,9 @@ from macholib.mach_o import LC_LOAD_WEAK_DYLIB
 from macholib.mach_o import LC_REEXPORT_DYLIB
 from macholib.mach_o import LC_RPATH
 from macholib.mach_o import get_cpu_subtype
-from macholib.ptypes import Structure
-from macholib.ptypes import p_int32
-from macholib.ptypes import p_int64
-from macholib.ptypes import p_long
-from macholib.ptypes import p_short
-from macholib.ptypes import p_uint8
-from macholib.ptypes import p_uint32
-from macholib.ptypes import p_uint64
-from macholib.ptypes import p_ulong
-from macholib.ptypes import pypackable
-from macholib.ptypes import sizeof
-from macholib.util import fileview
 
 
+LOG = logging.getLogger(__name__)
 T = TypeVar("T")
 
 # Maps from macholib's CPU_TYPE_NAMES entry and get_cpu_subtype output to
@@ -114,50 +102,6 @@ LIPO_ARCH_NAMES = {
 # See https://github.com/tpoechtrager/cctools-port/blob/11c93763d7e7ce7305163341d08052374e4712de/cctools/otool/ofile_print.c#L2963-L2967
 # Note: I skipped LC_IDFVMLIB and LC_LOADFVMLIB - not sure if they're still used?
 LIBRARY_COMMANDS = [LC_LOAD_DYLIB, LC_LOAD_WEAK_DYLIB, LC_REEXPORT_DYLIB, LC_LOAD_UPWARD_DYLIB, LC_LAZY_LOAD_DYLIB]
-
-
-class cs_blob_index(Structure):
-    _fields_ = [
-        ("type", p_uint32),  # type of entry
-        ("offset", p_uint32),  # offset of entry
-    ]
-
-class cs_super_blob(Structure):
-    _fields_ = [
-        ("magic", p_uint32),
-        ("length", p_uint32),
-        ("count", p_uint32),
-    ]
-
-class cs_code_directory(Structure):
-    _fields_ = [
-        ("magic", p_uint32),  # magic number (CSMAGIC_CODEDIRECTORY)
-        ("length", p_uint32),  # total length of CodeDirectory blob
-        ("version", p_uint32),  # compatibility version
-        ("flags", p_uint32),  # setup and mode flags
-        ("hashoffset", p_uint32),  # offset of hash slot element at index zero
-        ("identoffset", p_uint32),  # offset of identifier string
-        ("nspecialslots", p_uint32),  # number of special hash slots
-        ("ncodeslots", p_uint32),  # number of ordinary (code) hash slots
-        ("codelimit", p_uint32),  # limit to main image signature range
-        ("hashsize", p_uint8),  # size of each hash in bytes
-        ("hashtype", p_uint8),  # type of hash (cdHashType* constants)
-        ("spare1", p_uint8),  # unused (must be zero)
-        ("pagesize", p_uint8),  # log2(page size in bytes); 0 => infinite
-        ("spare2", p_uint8),  # unused (must be zero)
-    ]
-    # followed by dynamic content as located by offset fields above
-
-
-class nlist_64(Structure):
-    _fields_ = [
-        ("n_un", n_un),
-        ("n_type", p_uint8),
-        ("n_sect", p_uint8),
-        ("n_desc", p_short),
-        ("n_value", p_int64),
-    ]
-
 
 
 def _all_arches_same_value(macho: MachO, fn: Callable[[MachOHeader], T]) -> T:
@@ -394,30 +338,6 @@ def replace_signature(filename: str, identity: str) -> None:
     if identity != "-":
         raise ValueError("This implementation only supports ad-hoc signing ('-')")
     raise NotImplementedError
-
-
-def _do_validate_thin_entry(filename: str, header: MachOHeader) -> bool:
-    for entry in header.commands:
-        lc, cmd, data = entry
-        if lc.cmd == LC_CODE_SIGNATURE:
-            break
-    else:
-        # No code signature
-        return True
-
-    
-
-    with open(filename, "rb") as fh:
-        fh = fileview(fh, header.offset, header.size)
-
-
-def _do_validate_signature(filename: str) -> bool:
-    macho = MachO(filename)
-    for header in macho.headers:
-        if not _do_validate_thin_entry(filename, header):
-            return False
-    
-    return True
 
 
 def validate_signature(filename: str) -> None:
