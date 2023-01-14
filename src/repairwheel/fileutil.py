@@ -4,6 +4,7 @@ from typing import IO
 
 BUFSIZE = 8192
 
+
 def open_create(name: str, flags: int) -> IO:
     return os.open(name, flags | os.O_CREAT)
 
@@ -17,7 +18,7 @@ def fzero(fh: BinaryIO, offset: int, len: int, bufsize: int = BUFSIZE) -> None:
             fh.write(zeros)
         else:
             fh.write(zeros[:size])
-        len -= size;
+        len -= size
 
 
 def fmove(fh: BinaryIO, dst: int, src: int, len: int, bufsize: int = BUFSIZE) -> None:
