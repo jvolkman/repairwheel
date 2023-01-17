@@ -9,54 +9,39 @@ def open_create(name: str, flags: int) -> IO:
     return os.open(name, flags | os.O_CREAT)
 
 
-def fzero(fh: BinaryIO, offset: int, len: int, bufsize: int = BUFSIZE) -> None:
+def fzero(fh: BinaryIO, offset: int, length: int, bufsize: int = BUFSIZE) -> None:
     fh.seek(offset)
-    zeros = b'0' * bufsize
-    while len != 0:
-        size = min(len, bufsize)
-        if size == len:
-            fh.write(zeros)
-        else:
-            fh.write(zeros[:size])
-        len -= size
+    zeros = b"\0" * bufsize
+    while length > 0:
+        write_size = min(length, bufsize)
+        written = fh.write(zeros[:write_size])
+        length -= written
 
 
-def fmove(fh: BinaryIO, dst: int, src: int, len: int, bufsize: int = BUFSIZE) -> None:
+def fmove(fh: BinaryIO, dst: int, src: int, length: int, bufsize: int = BUFSIZE) -> None:
     if dst == src:
         return
 
     buf = bytearray()
 
     if dst < src:
-        while len != 0:
-            size = min(len, bufsize)
+        while length != 0:
+            to_move = min(length, bufsize)
             fh.seek(src)
-            buf = fh.read(bufsize)
+            buf = fh.read(to_move)
             fh.seek(dst)
-            fh.write(buf)
+            written = fh.write(buf)
 
-            len -= size
-            src += size
-            dst += size
+            length -= written
+            src += written
+            dst += written
 
     else:
-        while len != 0:
-            size = min(len, bufsize)
-            fh.seek(src + len - size)
-            buf = fh.read(size)
-            fh.seek(dst + len - size)
-            fh.write(buf)
+        while length != 0:
+            to_move = min(length, bufsize)
+            fh.seek(src + length - to_move)
+            buf = fh.read(to_move)
+            fh.seek(dst + length - to_move)
+            written = fh.write(buf)
 
-            len -= size
-
-
-def fcpy(fdst: BinaryIO, dst: int, fsrc: BinaryIO, src: int, len: int, bufsize: int = BUFSIZE) -> None:
-    fdst.seek(dst)
-    fsrc.seek(src)
-
-    while len != 0:
-        size = min(len, bufsize)
-        buf = fsrc.read(size)
-        fdst.write(buf)
-
-        len -= size
+            length -= written

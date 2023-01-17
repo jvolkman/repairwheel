@@ -1,22 +1,47 @@
+import dataclasses
 import hashlib
-import io
 import logging
 import math
+import os.path
+import sys
+from typing import BinaryIO
+from typing import Iterable
 from typing import List
+from typing import Optional
+from typing import Union
 from macholib.MachO import MachO
+from macholib.MachO import MachOHeader
+from macholib.mach_o import FAT_MAGIC
+from macholib.mach_o import FAT_MAGIC_64
+from macholib.mach_o import LC_CODE_SIGNATURE
+from macholib.mach_o import LC_SEGMENT
+from macholib.mach_o import LC_SEGMENT_64
+from macholib.mach_o import MH_BUNDLE
+from macholib.mach_o import MH_DYLIB
+from macholib.mach_o import MH_DYLINKER
+from macholib.mach_o import MH_EXECUTE
+from macholib.mach_o import MH_PRELOAD
+from macholib.mach_o import fat_arch
+from macholib.mach_o import fat_arch64
+from macholib.mach_o import fat_header
+from macholib.mach_o import linkedit_data_command
+from macholib.mach_o import load_command
 from macholib.ptypes import Structure
 from macholib.ptypes import p_uint8
 from macholib.ptypes import p_uint32
 from macholib.ptypes import p_uint64
 from macholib.ptypes import sizeof
 
+from .fileutil import fmove
+from .fileutil import fzero
 from .fileutil import open_create
 
-
+# References:
 # https://developer.apple.com/documentation/technotes/tn3126-inside-code-signing-hashes
 # https://github.com/thefloweringash/sigtool/blob/main/README.md
 # https://github.com/qyang-nj/llios/blob/main/macho_parser/docs/LC_CODE_SIGNATURE.md
 # https://medium.com/csit-tech-blog/demystifying-ios-code-signature-309d52c2ff1d
+# https://github.com/kabiroberai/macho_edit
 
 LOG = logging.getLogger(__name__)
 
@@ -43,6 +68,10 @@ CS_ADHOC = 0x2
 CS_HASHTYPE_SHA256 = 2
 
 CS_EXECSEG_MAIN_BINARY = 0x1
+
+
+class SigningException(Exception):
+    pass
 
 
 class cs_blob_index(Structure):
@@ -117,149 +146,392 @@ def log2(val: int) -> int:
     return int(math.log2(val))
 
 
-def _gen_signature(
-    page_hashes: List[bytes], identifier: str, code_limit: int, exec_start: int, exec_end: int, is_executable: bool
-) -> bytes:
-    # Generate an empty requirements blob and its hash, which we'll use later.
-    requirements_bytes = cs_requirements_blob(
-        magic=CSMAGIC_REQUIREMENTS,
-        length=sizeof(cs_requirements_blob),
-        data=0,
-    ).to_str()
-    requirements_hash = hashlib.sha256(requirements_bytes).digest()
-    assert len(requirements_hash) == SHA256_HASH_SIZE
+def iterate_page_hashes(fh: BinaryIO, offset: int, limit: int) -> Iterable[bytes]:
+    read_pos = offset
+    while read_pos < limit:
+        initial_pos = fh.tell()
+        page_size = min(CODE_DIRECTORY_PAGE_SIZE, limit - read_pos)
+        fh.seek(read_pos)
+        page_bytes = fh.read(page_size)
+        read_pos = fh.tell()
+        fh.seek(initial_pos)
+        yield hashlib.sha256(page_bytes).digest()
 
-    # Generate the code directory
-    dir = cs_code_directory(
-        magic=CSMAGIC_CODEDIRECTORY,
-        version=0x20400,
-        flags=CS_ADHOC,
-        nspecialslots=2,  # Just the requirements blob + empty Info.plist hash
-        ncodeslots=len(page_hashes),
-        hashsize=SHA256_HASH_SIZE,
-        hashtype=CS_HASHTYPE_SHA256,
-        platform=0,
-        pagesize=log2(CODE_DIRECTORY_PAGE_SIZE),
-        spare2=0,
-        scatteroffset=0,
-        teamoffset=0,
-        spare3=0,
-        execsegbase=exec_start,
-        execseglimit=exec_end,
-        execsegflags=CS_EXECSEG_MAIN_BINARY if is_executable else 0,
-    )
 
-    if code_limit <= 2**32:
-        dir.codelimit = code_limit
-        dir.codelimit64 = 0
+@dataclasses.dataclass
+class SuperBlob:
+    code_limit: int
+    identifier: str
+    exec_start: int
+    exec_end: int
+    is_executable: bool
+
+    @property
+    def page_count(self) -> int:
+        return math.ceil(self.code_limit / CODE_DIRECTORY_PAGE_SIZE)
+
+    @property
+    def length(self) -> int:
+        # To compute the length, we just write the whole structure to a
+        # fake io object that tracks position. Page hashes are null, but
+        # the proper length.
+        class _CountingIO:
+            def __init__(self):
+                self.pos = 0
+
+            def write(self, data: bytes) -> int:
+                self.pos += len(data)
+                return len(data)
+
+            def seek(self, pos: int) -> int:
+                self.pos = pos
+                return pos
+
+            def tell(self) -> int:
+                return self.pos
+
+        counting = _CountingIO()
+        hashes = ("\0" * SHA256_HASH_SIZE for _ in range(self.page_count))
+        self.write(counting, hashes)
+        return counting.tell()
+
+    def write(self, fh: BinaryIO, hashes: Iterable[bytes]):
+        # remember our starting position
+        super_blob_offset = fh.tell()
+
+        # Generate an empty requirements blob and its hash, which we'll use later.
+        requirements_bytes = cs_requirements_blob(
+            magic=CSMAGIC_REQUIREMENTS,
+            length=sizeof(cs_requirements_blob),
+            data=0,
+        ).to_str()
+        requirements_hash = hashlib.sha256(requirements_bytes).digest()
+        assert len(requirements_hash) == SHA256_HASH_SIZE
+
+        # Setup the super blob structure. Length will be added later.
+        super = cs_super_blob(
+            magic=CSMAGIC_EMBEDDED_SIGNATURE,
+            count=3,  # code directory, requirements, wrapper
+        )
+
+        # Super blob indexes that store offsets to the following sections
+        index_dir = cs_blob_index(type=CSSLOT_CODEDIRECTORY)
+        index_requirements = cs_blob_index(type=CSSLOT_REQUIREMENTS)
+        index_wrapper = cs_blob_index(type=CSSLOT_SIGNATURESLOT)
+
+        # Record the code directory offset which follows the super blob header and
+        # index entries. There are three entries: the code directory, an empty
+        # requirements blob, and the final wrapper blob.
+        dir_offset = super_blob_offset + sizeof(cs_super_blob) + sizeof(cs_blob_index) * 3
+
+        # The offset stored in the index entry is relative to the start of the super blob.
+        index_dir.offset = dir_offset - super_blob_offset
+
+        # Setup the code directory
+        dir = cs_code_directory(
+            magic=CSMAGIC_CODEDIRECTORY,
+            version=0x20400,
+            flags=CS_ADHOC,
+            nspecialslots=2,  # Just the requirements blob + empty Info.plist hash
+            ncodeslots=self.page_count,
+            hashsize=SHA256_HASH_SIZE,
+            hashtype=CS_HASHTYPE_SHA256,
+            platform=0,
+            pagesize=log2(CODE_DIRECTORY_PAGE_SIZE),
+            spare2=0,
+            scatteroffset=0,
+            teamoffset=0,
+            spare3=0,
+            execsegbase=self.exec_start,
+            execseglimit=self.exec_end,
+            execsegflags=CS_EXECSEG_MAIN_BINARY if self.is_executable else 0,
+        )
+
+        if self.code_limit <= 2**32:
+            dir.codelimit = self.code_limit
+            dir.codelimit64 = 0
+        else:
+            dir.codelimit = 0
+            dir.codelimit64 = self.code_limit
+
+        # Skip over the directory structure while we write the data after it.
+        fh.seek(dir_offset + sizeof(cs_code_directory))
+
+        # Write the identifier string
+        dir.identoffset = fh.tell() - dir_offset
+        fh.write(self.identifier.encode("utf-8"))
+        fh.write(b"\0")  # null terminator
+
+        # Write our two special hashes: the requirements hash and the null Info.plist hash
+        fh.write(requirements_hash)
+        fh.write(b"\0" * SHA256_HASH_SIZE)
+
+        dir.hashoffset = fh.tell() - dir_offset
+
+        # Write the code page hashes
+        page_count = self.page_count
+        for i, hash in enumerate(hashes):
+            # Some sanity checks
+            assert i < page_count, f"Too many hashes provided: expected {page_count}"
+            assert len(hash) == SHA256_HASH_SIZE, f"Hash is the wrong size: got {len(hash)}, expected {SHA256_HASH_SIZE}"
+            fh.write(hash)
+
+        # Record the final directory length. We'll write the directory structure later.
+        dir.length = fh.tell() - dir_offset
+
+        # Write the resources blob and record its offset
+        index_requirements.offset = fh.tell() - super_blob_offset
+        fh.write(requirements_bytes)
+
+        # Write the trailing wrapper blob and record its offset
+        index_wrapper.offset = fh.tell() - super_blob_offset
+        cs_generic_blob(
+            magic=CSMAGIC_BLOBWRAPPER,
+            length=sizeof(cs_generic_blob),
+        ).to_fileobj(fh)
+
+        # Record the final length of the super blob.
+        end = fh.tell()
+        super.length = end - super_blob_offset
+
+        # Now skip back to the start of the super blob and write it, the index
+        # entries, and the code directory structure.
+        fh.seek(super_blob_offset)
+        super.to_fileobj(fh)
+        index_dir.to_fileobj(fh)
+        index_requirements.to_fileobj(fh)
+        index_wrapper.to_fileobj(fh)
+        dir.to_fileobj(fh)
+
+        # Leave fh at the end of the whole thing.
+        fh.seek(end)
+
+
+@dataclasses.dataclass
+class FatInfo:
+    header: fat_header
+    archs: List[Union[fat_arch, fat_arch64]]
+
+
+@dataclasses.dataclass
+class SigInfo:
+    signature_bytes: bytes
+    hash_offset: int
+
+
+@dataclasses.dataclass
+class ArchInfo:
+    signature_needed: bool = False
+    original_offset: int = 0
+    original_size: int = 0
+    new_offset: int = 0
+    new_size: int = 0
+    new_linkedit_size: int = 0
+    signature_command_index: Optional[int] = None
+    super_blob: SuperBlob = None
+    code_signature_offset: int = None
+    code_signature_size: int = None
+
+
+def _load_fat(fh: BinaryIO) -> FatInfo:
+    info = FatInfo(header=fat_header.from_fileobj(fh), archs=None)
+
+    if info.header.magic == FAT_MAGIC:
+        info.archs = [fat_arch.from_fileobj(fh) for _ in range(info.header.nfat_arch)]
+    elif info.header.magic == FAT_MAGIC_64:
+        info.archs = [fat_arch64.from_fileobj(fh) for _ in range(info.header.fat.nfat_arch)]
     else:
-        dir.codelimit = 0
-        dir.codelimit64 = code_limit
+        raise ValueError("Unknown fat header magic: %r" % (info.header.magic))
 
-    dir_io = io.BytesIO()
-
-    # Skip over the CD structure while we write the data after it.
-    dir_io.seek(sizeof(cs_code_directory))
-
-    # Write the identifier string
-    dir.identoffset = dir_io.tell()
-    dir_io.write(identifier.encode("utf-8"))
-    dir_io.write(b'\0')  # null terminator
-
-    # Write our two special hashes: the requirements hash and the null Info.plist hash
-    dir_io.write(requirements_hash)
-    dir_io.write(b'\0' * SHA256_HASH_SIZE)
-
-    # Record the offset to the first code page hash
-    dir.hashoffset = dir_io.tell()
-    for page_hash in page_hashes:
-        assert len(page_hash) == SHA256_HASH_SIZE
-        dir_io.write(page_hash)
-
-    # Now we know the final length
-    dir.length = dir_io.tell()
-    dir_io.seek(0)
-    dir.to_fileobj(dir_io)
-
-    dir_bytes = dir_io.getvalue()
-
-    # Generate the trailing wrapper bytes
-    wrapper_bytes = cs_generic_blob(
-        magic=CSMAGIC_BLOBWRAPPER,
-        length=sizeof(cs_generic_blob),
-    ).to_str()
-
-    # Now we generate the full super blob structure
-    super = cs_super_blob(
-        magic=CSMAGIC_EMBEDDED_SIGNATURE,
-        count=3,  # code directory, requirements, wrapper
-    )
-
-    index_dir = cs_blob_index(type=CSSLOT_CODEDIRECTORY)
-    index_requirements = cs_blob_index(type=CSSLOT_REQUIREMENTS)
-    index_wrapper = cs_blob_index(type=CSSLOT_SIGNATURESLOT)
-
-    super_io = io.BytesIO()
-    super_io.seek(sizeof(cs_super_blob) + 3 * sizeof(cs_blob_index))  # 3 index entries for our three blobs
-
-    # First write the indexes for our blobs.
-    index_dir.offset = super_io.tell()
-    super_io.write(dir_bytes)
-
-    index_requirements.offset = super_io.tell()
-    super_io.write(requirements_bytes)
-
-    index_wrapper.offset = super_io.tell()
-    super_io.write(wrapper_bytes)
-
-    super.length = super_io.tell()
-
-    # Now write the super blob header and index entries
-    super_io.seek(0)
-    super.to_fileobj(super_io)
-    index_dir.to_fileobj(super_io)
-    index_requirements.to_fileobj(super_io)
-    index_wrapper.to_fileobj(super_io)
-
-    return super_io.getvalue()
+    return info
 
 
-def _calc_signature_length(identifier: str, code_limit: int) -> int:
-    # Maybe unnecessarily expensive, but the easiest way to calculate the signature length
-    # is to generate it with null data and count.
-    num_pages = math.ceil(code_limit / CODE_DIRECTORY_PAGE_SIZE)
-    null_hashes = [b'\0' * SHA256_HASH_SIZE] * num_pages
-    bytes = _gen_signature(
-        page_hashes=null_hashes,
+def _prepare_arch(header: MachOHeader, identifier: str) -> ArchInfo:
+    info = ArchInfo()
+    info.signature_needed = header.header.filetype in [
+        MH_EXECUTE,
+        MH_DYLIB,
+        MH_DYLINKER,
+        MH_BUNDLE,
+        MH_PRELOAD,
+    ]
+    info.original_offset = header.offset
+    info.original_size = header.size
+
+    # if we don't need to sign this one, we don't need to continue.
+    if not info.signature_needed:
+        info.new_size = header.size
+        return info
+
+    # Iterate through commands and pull out things we're interested in.
+    code_signature_offset = 0
+    last_linkedit_offset = 0
+    exec_base = 0
+    exec_limit = 0
+    original_linkedit_size = 0
+    original_linkedit_end = 0
+    original_signature_size = 0
+    for i, (load, cmd, _) in enumerate(header.commands):
+        if load.cmd in (LC_SEGMENT, LC_SEGMENT_64) and cmd.segname.rstrip(b'\0') == b"__TEXT":
+            exec_base = cmd.fileoff
+            exec_limit = cmd.filesize
+
+        if load.cmd in (LC_SEGMENT, LC_SEGMENT_64) and cmd.segname.rstrip(b'\0') == b"__LINKEDIT":
+            original_linkedit_size = cmd.filesize
+            original_linkedit_end = cmd.fileoff + cmd.filesize
+
+        elif load.cmd == LC_CODE_SIGNATURE:
+            code_signature_offset = cmd.dataoff
+            original_signature_size = cmd.datasize
+            info.signature_command_index = i
+
+        if isinstance(cmd, linkedit_data_command):
+            if cmd.dataoff > last_linkedit_offset:
+                last_linkedit_offset = cmd.dataoff
+
+    if code_signature_offset and code_signature_offset < last_linkedit_offset:
+        raise SigningException("Code signature is not the last __LINKEDIT section; cannot modify")
+
+    info.code_signature_offset = code_signature_offset or original_linkedit_end
+    if not info.code_signature_offset:
+        raise SigningException("Missing __LINKEDIT section; cannot add signature")
+
+    if info.signature_command_index is None:
+        # We need to add a new load command for the signature. Make sure there's enough space.
+        command_len = sizeof(load_command) + sizeof(linkedit_data_command)
+        available = header.low_offset - header.total_size
+        if command_len > available:
+            raise SigningException(
+                f"Not enough space to insert LC_CODE_SIGNATURE command: need {command_len}, have {available}"
+            )
+
+    info.super_blob = SuperBlob(
+        code_limit=info.code_signature_offset,
         identifier=identifier,
-        code_limit=code_limit,
-        exec_start=0,
-        exec_end=0,
-        is_executable=False,
+        exec_start=exec_base,
+        exec_end=exec_limit,
+        is_executable=header.header.filetype == MH_EXECUTE,
     )
-    return len(bytes)
+
+    # For reasons I don't understand, the code signature linkedit entry is the super blob length aligned
+    # to 16 bytes and padded with 1024 bytes at the end.
+    super_blob_length = info.super_blob.length
+    new_signature_size = ((super_blob_length + 0xF) & ~0xF) + 1024
+    info.code_signature_size = new_signature_size
+    info.new_linkedit_size = original_linkedit_size - original_signature_size + new_signature_size
+    info.new_size = info.code_signature_offset + new_signature_size
+
+    return info
+
+
+def round_to_multiple(num: int, multiple: int) -> int:
+    return ((num + multiple - 1) // multiple) * multiple
+
+
+def _ad_hoc_sign(filename: str, fh: BinaryIO) -> None:
+    identifier = os.path.basename(filename)
+    macho = MachO(filename)
+    fh.seek(0)
+    if macho.fat:
+        fat_info = _load_fat(fh)
+    else:
+        fat_info = None
+
+    arch_infos = [_prepare_arch(header, identifier) for header in macho.headers]
+
+    # The first arch's offset won't change.
+    arch_infos[0].new_offset = arch_infos[0].original_offset
+
+    if fat_info:
+        # First thing we need to do is expand or contract the fat structure based
+        # on new arch sizes. If we add a signature to an arch that didn't have one,
+        # or shorten or lengthen the signature of an arch that did, the overall
+        # structure of the universal binary may need to change.
+
+        # For each additional arch, compute its new offset based on the end position of
+        # the previous.
+        for i in range(1, len(arch_infos)):
+            align_bytes = 2 ** fat_info.archs[i].align
+            arch_infos[i].new_offset = round_to_multiple(
+                arch_infos[i - 1].new_offset + arch_infos[i - 1].new_size, align_bytes
+            )
+
+        # Move each arch around, in reverse order
+        for arch in reversed(arch_infos):
+            fmove(fh, arch.new_offset, arch.original_offset, arch.original_size)
+
+        # Zero out the spaces between archs
+        for i in range(len(arch_infos) - 1):
+            start = arch_infos[i].new_offset + arch_infos[i].original_size
+            end = arch_infos[i + 1].new_offset
+            fzero(fh, start, end - start)
+
+        # Update the fat structures
+        for arch, fat_arch in zip(arch_infos, fat_info.archs):
+            fat_arch.offset = arch.new_offset
+            fat_arch.size = arch.new_size
+
+        # Rewrite the fat structure
+        fh.seek(0)
+        fat_info.header.to_fileobj(fh)
+        for arch in fat_info.archs:
+            arch.to_fileobj(fh)
+
+    # Truncate the file to the new end of the last arch.
+    fh.truncate(arch_infos[-1].new_offset + arch_infos[-1].new_size)
+
+    # Now with the fat structure possibly changed, we reload our mach headers.
+    macho = MachO(filename)
+
+    for arch, header in zip(arch_infos, macho.headers):
+        if not arch.signature_needed:
+            continue
+
+        for load, cmd, _ in header.commands:
+            if load.cmd in (LC_SEGMENT, LC_SEGMENT_64) and cmd.segname.rstrip(b'\0') == b"__LINKEDIT":
+                cmd.filesize = arch.new_linkedit_size
+                break
+
+        if arch.signature_command_index:
+            # Adjust the superblob length in the original LC_CODE_SIGNATURE command.
+            _, cmd, _ = header.commands[arch.signature_command_index]
+            cmd.datasize = arch.code_signature_size
+        else:
+            # Add a new load command and increase the ncmds and sizeofcmds values.
+            # Note that we must specify proper endianness for these commands.
+            load = load_command(
+                cmd=LC_CODE_SIGNATURE, cmdsize=sizeof(load_command) + sizeof(linkedit_data_command), _endian_=header.endian
+            )
+            cmd = linkedit_data_command(
+                dataoff=arch.code_signature_offset, datasize=arch.code_signature_size, _endian_=header.endian
+            )
+            header.commands.append((load, cmd, b''))
+            header.header.ncmds += 1
+            header.changedHeaderSizeBy(load.cmdsize)
+
+    # Write our header changes.
+    fh.seek(0)
+    macho.write(fh)
+
+    # Lastly, write our actual signatures.
+    for arch, header in zip(arch_infos, macho.headers):
+        if not arch.signature_needed:
+            continue
+
+        signature_offset = arch.new_offset + arch.code_signature_offset
+        hashes = iterate_page_hashes(fh, arch.new_offset, signature_offset)
+        fh.seek(signature_offset)
+        arch.super_blob.write(fh, hashes)
+
+        # Zero out the remainder of the the code signature section
+        zero_len = arch.code_signature_size - (fh.tell() - signature_offset)
+        fzero(fh, fh.tell(), zero_len)
 
 
 def ad_hoc_sign(filename: str) -> None:
-    macho = MachO(filename)
-    with open(filename, 'r+', opener=open_create) as fh:
-        fh.seek(0)
-        if macho.fat:
-            # MachO doesn't hold on to the FAT specifics, so we read them again
-            pass
+    with open(filename, 'rb+', opener=open_create) as fh:
+        _ad_hoc_sign(filename, fh)
 
 
-def validate_signature(filename: str) -> None:
-    """Remove invalid signatures from a binary file
-
-    If the file signature is missing or valid then it will be ignored
-
-    Invalid signatures are replaced with an ad-hoc signature.  This is the
-    closest you can get to removing a signature on MacOS
-
-    Parameters
-    ----------
-    filename : str
-        Filepath to a binary file
-    """
-    raise NotImplementedError
+if __name__ == "__main__":
+    ad_hoc_sign(sys.argv[1])
