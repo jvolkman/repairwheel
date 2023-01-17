@@ -413,10 +413,7 @@ def _prepare_arch(header: MachOHeader, identifier: str) -> ArchInfo:
         is_executable=header.header.filetype == MH_EXECUTE,
     )
 
-    # For reasons I don't understand, the code signature linkedit entry is the super blob length aligned
-    # to 16 bytes and padded with 1024 bytes at the end.
-    super_blob_length = info.super_blob.length
-    new_signature_size = ((super_blob_length + 0xF) & ~0xF) + 1024
+    new_signature_size = info.super_blob.length
     info.code_signature_size = new_signature_size
     info.new_linkedit_size = original_linkedit_size - original_signature_size + new_signature_size
     info.new_size = info.code_signature_offset + new_signature_size
