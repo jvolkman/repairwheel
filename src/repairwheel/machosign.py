@@ -455,11 +455,11 @@ def _ad_hoc_sign(filename: str, fh: BinaryIO) -> None:
 
         # Move each arch around, in reverse order
         for arch in reversed(arch_infos):
-            fmove(fh, arch.new_offset, arch.original_offset, arch.original_size)
+            fmove(fh, arch.new_offset, arch.original_offset, arch.new_size)
 
         # Zero out the spaces between archs
         for i in range(len(arch_infos) - 1):
-            start = arch_infos[i].new_offset + arch_infos[i].original_size
+            start = arch_infos[i].new_offset + arch_infos[i].new_size
             end = arch_infos[i + 1].new_offset
             fzero(fh, start, end - start)
 
