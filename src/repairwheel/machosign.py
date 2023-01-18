@@ -372,11 +372,11 @@ def _prepare_arch(header: MachOHeader, identifier: str) -> ArchInfo:
     original_linkedit_end = 0
     original_signature_size = 0
     for i, (load, cmd, _) in enumerate(header.commands):
-        if load.cmd in (LC_SEGMENT, LC_SEGMENT_64) and cmd.segname.rstrip(b'\0') == b"__TEXT":
+        if load.cmd in (LC_SEGMENT, LC_SEGMENT_64) and cmd.segname.rstrip(b"\0") == b"__TEXT":
             exec_base = cmd.fileoff
             exec_limit = cmd.filesize
 
-        if load.cmd in (LC_SEGMENT, LC_SEGMENT_64) and cmd.segname.rstrip(b'\0') == b"__LINKEDIT":
+        if load.cmd in (LC_SEGMENT, LC_SEGMENT_64) and cmd.segname.rstrip(b"\0") == b"__LINKEDIT":
             original_linkedit_size = cmd.filesize
             original_linkedit_end = cmd.fileoff + cmd.filesize
 
@@ -485,7 +485,7 @@ def _ad_hoc_sign(filename: str, fh: BinaryIO) -> None:
             continue
 
         for load, cmd, _ in header.commands:
-            if load.cmd in (LC_SEGMENT, LC_SEGMENT_64) and cmd.segname.rstrip(b'\0') == b"__LINKEDIT":
+            if load.cmd in (LC_SEGMENT, LC_SEGMENT_64) and cmd.segname.rstrip(b"\0") == b"__LINKEDIT":
                 cmd.filesize = arch.new_linkedit_size
                 break
 
@@ -502,7 +502,7 @@ def _ad_hoc_sign(filename: str, fh: BinaryIO) -> None:
             cmd = linkedit_data_command(
                 dataoff=arch.code_signature_offset, datasize=arch.code_signature_size, _endian_=header.endian
             )
-            header.commands.append((load, cmd, b''))
+            header.commands.append((load, cmd, b""))
             header.header.ncmds += 1
             header.changedHeaderSizeBy(load.cmdsize)
 
@@ -526,7 +526,7 @@ def _ad_hoc_sign(filename: str, fh: BinaryIO) -> None:
 
 
 def ad_hoc_sign(filename: str) -> None:
-    with open(filename, 'rb+', opener=open_create) as fh:
+    with open(filename, "rb+", opener=open_create) as fh:
         _ad_hoc_sign(filename, fh)
 
 
