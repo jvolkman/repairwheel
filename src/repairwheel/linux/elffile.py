@@ -157,13 +157,15 @@ class ElfFile:
         else:
             raise ValueError(f"Unknown ei_data value: {ident.ei_data}")
 
-    def header(self) -> Elf_Ehdr:
+    @property
+    def ehdr(self) -> Elf_Ehdr:
         self._fh.seek(0)
         return self._cls_ehdr.from_fileobj(self._fh, _endian_=self._endian)
 
-    def section_headers(self) -> List[Elf_Shdr]:
+    @property
+    def shdrs(self) -> List[Elf_Shdr]:
         fh = self._fh
-        h = self.header()
+        h = self.ehdr
 
         # Sanity check header size
         if h.e_shentsize != sizeof(self._cls_shdr):
@@ -190,8 +192,13 @@ class ElfFile:
 
         return result
 
-    # def dynamic_headers(self) -> List[]:
-    #     pass
+    def shdr_name(self, index) -> bytes:
+        ehdr = self.ehdr
+        shdrs = self.shdrs
+        strtab_off = shdrs[ehdr.e_shstrndx].sh_offset
+        name_pos = strtab_off + self.shdrs[index].sh_name
+        self._fh.seek(name_pos)
+        return read_c_str(self._fh)
 
 
 def read_c_str(fh: BinaryIO) -> bytes:
@@ -211,40 +218,3 @@ def read_c_str(fh: BinaryIO) -> bytes:
             break
 
     return data
-
-
-
-
-
-class cs_code_directory(Structure):
-    _endian_ = ">"
-
-    # Fields below marked as ">= version" will be garbage when read from a
-    # lower-versioned structure.
-    _fields_ = [
-        ("magic", p_uint32),  # magic number (CSMAGIC_CODEDIRECTORY)
-        ("length", p_uint32),  # total length of CodeDirectory blob
-        ("version", p_uint32),  # compatibility version
-        ("flags", p_uint32),  # setup and mode flags
-        ("hashoffset", p_uint32),  # offset of hash slot element at index zero
-        ("identoffset", p_uint32),  # offset of identifier string
-        ("nspecialslots", p_uint32),  # number of special hash slots
-        ("ncodeslots", p_uint32),  # number of ordinary (code) hash slots
-        ("codelimit", p_uint32),  # limit to main image signature range
-        ("hashsize", p_uint8),  # size of each hash in bytes
-        ("hashtype", p_uint8),  # type of hash (cdHashType* constants)
-        ("platform", p_uint8),  # platform identifier; zero if not platform binary
-        ("pagesize", p_uint8),  # log2(page size in bytes); 0 => infinite
-        ("spare2", p_uint32),  # unused (must be zero)
-        # Version >= 0x20100
-        ("scatteroffset", p_uint32),  # offset of optional scatter vector
-        # Version >= 0x20200
-        ("teamoffset", p_uint32),  # offset of optional team identifier
-        # Version >= 0x20300
-        ("spare3", p_uint32),  # unused (must be zero)
-        ("codelimit64", p_uint64),  # limit to main image signature range, 64 bits
-        # Version >= 0x20400
-        ("execsegbase", p_uint64),  # offset of executable segment
-        ("execseglimit", p_uint64),  # limit of executable segment
-        ("execsegflags", p_uint64),  # executable segment flags
-    ]
