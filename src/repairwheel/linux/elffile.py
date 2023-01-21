@@ -1,3 +1,5 @@
+from contextlib import contextmanager
+from dataclasses import dataclass
 from typing import BinaryIO
 from typing import List
 from typing import Union
@@ -99,6 +101,32 @@ class Elf64_Ehdr(Structure):
     ]
 
 
+class Elf32_Phdr(Structure):
+    _fields_ = [
+        ("p_type", Elf32_Word),
+        ("p_offset", Elf32_Off),
+        ("p_vaddr", Elf32_Addr),
+        ("p_paddr", Elf32_Addr),
+        ("p_filesz", Elf32_Word),
+        ("p_memsz", Elf32_Word),
+        ("p_flags", Elf32_Word),
+        ("p_align", Elf32_Word),
+    ]
+
+
+class Elf64_Phdr(Structure):
+    _fields_ = [
+        ("p_type", Elf64_Word),
+        ("p_flags", Elf64_Word),
+        ("p_offset", Elf64_Off),
+        ("p_vaddr", Elf64_Addr),
+        ("p_paddr", Elf64_Addr),
+        ("p_filesz", Elf64_Xword),
+        ("p_memsz", Elf64_Xword),
+        ("p_align", Elf64_Xword),
+    ]
+
+
 class Elf32_Shdr(Structure):
     _fields_ = [
         ("sh_name", Elf32_Word),
@@ -130,23 +158,40 @@ class Elf64_Shdr(Structure):
 
 
 Elf_Ehdr = Union[Elf32_Ehdr, Elf64_Ehdr]
+Elf_Phdr = Union[Elf32_Phdr, Elf64_Phdr]
 Elf_Shdr = Union[Elf32_Shdr, Elf64_Shdr]
 
+
+@dataclass
+class ElfClass:
+    Ehdr: Elf_Ehdr
+    Phdr: Elf_Phdr
+    Shdr: Elf_Shdr
+
+
+ELF32_CLASS = ElfClass(
+    Ehdr=Elf32_Ehdr,
+    Phdr=Elf32_Phdr,
+    Shdr=Elf32_Shdr,
+)
+
+ELF64_CLASS = ElfClass(
+    Ehdr=Elf64_Ehdr,
+    Phdr=Elf64_Phdr,
+    Shdr=Elf64_Shdr,
+)
 
 class ElfFile:
     def __init__(self, fh: BinaryIO):
         self._fh = fh
-        fh.seek(0)
-        ident = ElfIdent.from_fileobj(fh)
 
+        ident = self.ident
         self.elf_class = ident.ei_class
 
         if ident.ei_class == ELFCLASS32:
-            self._cls_ehdr = Elf32_Ehdr
-            self._cls_shdr = Elf32_Shdr
+            self._class = ELF32_CLASS
         elif ident.ei_class == ELFCLASS64:
-            self._cls_ehdr = Elf64_Ehdr
-            self._cls_shdr = Elf64_Shdr
+            self._class = ELF64_CLASS
         else:
             raise ValueError(f"Unknown ei_class value: {ident.ei_class}")
 
@@ -157,38 +202,72 @@ class ElfFile:
         else:
             raise ValueError(f"Unknown ei_data value: {ident.ei_data}")
 
+    @contextmanager
+    def _peek(self) -> BinaryIO:
+        """Yields self._fh and resets to its original position upon exit."""
+        pos = self._fh.tell()
+        yield self._fh
+        self._fh.seek(pos)
+
+    @property
+    def ident(self) -> ElfIdent:
+        with self._peek() as fh:
+            fh.seek(0)
+            return ElfIdent.from_fileobj(fh)
+
     @property
     def ehdr(self) -> Elf_Ehdr:
-        self._fh.seek(0)
-        return self._cls_ehdr.from_fileobj(self._fh, _endian_=self._endian)
+        with self._peek() as fh:
+            fh.seek(0)
+            return self._class.Ehdr.from_fileobj(fh, _endian_=self._endian)
+
+    @property
+    def phdrs(self) -> List[Elf_Phdr]:
+        h = self.ehdr
+        # Sanity check header size
+        if h.e_phentsize != sizeof(self._class.Phdr):
+            raise ValueError(f"ELF Phdr entry size ({h.e_phentsize}) doesn't match expected ({sizeof(self._class.Phdr)})")
+
+        if not h.e_phoff:
+            return []
+
+        result = []
+        entry_count = h.e_phnum
+        with self._peek() as fh:
+            fh.seek(h.e_phoff)
+
+            for _ in range(entry_count):
+                result.append(self._class.Phdr.from_fileobj(fh, _endian_=self._endian))
+
+        return result
 
     @property
     def shdrs(self) -> List[Elf_Shdr]:
-        fh = self._fh
         h = self.ehdr
 
         # Sanity check header size
-        if h.e_shentsize != sizeof(self._cls_shdr):
-            raise ValueError(f"ELF Shdr entry size ({h.e_shentsize}) doesn't match expected ({sizeof(self._cls_shdr)})")
+        if h.e_shentsize != sizeof(self._class.Shdr):
+            raise ValueError(f"ELF Shdr entry size ({h.e_shentsize}) doesn't match expected ({sizeof(self._class.Shdr)})")
 
         if not h.e_shoff:
             return []
 
         result = []
         entry_count = h.e_shnum
-        fh.seek(h.e_shoff)
+        with self._peek() as fh:
+            fh.seek(h.e_shoff)
 
-        if not entry_count:
-            # If the number of sections is greater than or equal to SHN_LORESERVE (0xff00),
-            # e_shnum has the value zero. The actual number of section header table entries
-            # is contained in the sh_size field of the section header at index 0. Otherwise,
-            # the sh_size member of the initial section header entry contains the value zero.
-            first_entry = self._cls_shdr.from_fileobj(fh, _endian_=self._endian)
-            entry_count = first_entry.sh_size - 1  # We already read the first entry
-            result.append(first_entry)
+            if not entry_count:
+                # If the number of sections is greater than or equal to SHN_LORESERVE (0xff00),
+                # e_shnum has the value zero. The actual number of section header table entries
+                # is contained in the sh_size field of the section header at index 0. Otherwise,
+                # the sh_size member of the initial section header entry contains the value zero.
+                first_entry = self._class.Shdr.from_fileobj(fh, _endian_=self._endian)
+                entry_count = first_entry.sh_size - 1  # We already read the first entry
+                result.append(first_entry)
 
-        for _ in range(entry_count):
-            result.append(self._cls_shdr.from_fileobj(fh, _endian_=self._endian))
+            for _ in range(entry_count):
+                result.append(self._class.Shdr.from_fileobj(fh, _endian_=self._endian))
 
         return result
 
@@ -197,8 +276,9 @@ class ElfFile:
         shdrs = self.shdrs
         strtab_off = shdrs[ehdr.e_shstrndx].sh_offset
         name_pos = strtab_off + self.shdrs[index].sh_name
-        self._fh.seek(name_pos)
-        return read_c_str(self._fh)
+        with self._peek() as fh:
+            fh.seek(name_pos)
+            return read_c_str(fh)
 
 
 def read_c_str(fh: BinaryIO) -> bytes:
