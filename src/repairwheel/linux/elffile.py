@@ -181,6 +181,21 @@ ELF64_CLASS = ElfClass(
     Shdr=Elf64_Shdr,
 )
 
+
+# .interp, PT_INTERP
+# .dynamic, PT_DYNAMIC
+# PT_NOTE
+# .MIPS.abiflags, PT_MIPS_ABIFLAGS
+# .note.gnu.property, PT_GNU_PROPERTY
+
+# .dynsym
+
+# Move everything down
+# insert new LOAD Phdr
+# copy DYNAMIC section, change Phdr 
+
+
+
 class ElfFile:
     def __init__(self, fh: BinaryIO):
         self._fh = fh
@@ -213,7 +228,10 @@ class ElfFile:
     def ident(self) -> ElfIdent:
         with self._peek() as fh:
             fh.seek(0)
-            return ElfIdent.from_fileobj(fh)
+            ident = ElfIdent.from_fileobj(fh)
+        if (ident.ei_mag0, ident.ei_mag1, ident.ei_mag2, ident.ei_mag3) != (b"0x7f", b"E", b"L", b"F"):
+            raise ValueError("Not an ELF file")
+        return ident
 
     @property
     def ehdr(self) -> Elf_Ehdr:
@@ -283,7 +301,7 @@ class ElfFile:
 
 def read_c_str(fh: BinaryIO) -> bytes:
     start = fh.tell()
-    data = b''
+    data = b""
     while True:
         read = fh.read(32)  # read 32 bytes at a time
         if not read:
@@ -291,7 +309,7 @@ def read_c_str(fh: BinaryIO) -> bytes:
             return data
 
         data += read
-        null_pos = data.find(b'\0')
+        null_pos = data.find(b"\0")
         if null_pos >= 0:
             data = data[:null_pos]
             fh.seek(start + len(data) + 1)  # Seek after the null
