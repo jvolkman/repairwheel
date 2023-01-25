@@ -27,6 +27,9 @@ Elf64_Sxword = p_int64
 Elf64_Addr = p_uint64
 Elf64_Off = p_uint64
 
+# The four ELF magic number parts
+ELF_MAGIC = (0x7f, ord("E"), ord("L"), ord("F"))
+
 ELFCLASS32 = 1
 ELFCLASS64 = 2
 
@@ -229,7 +232,7 @@ class ElfFile:
         with self._peek() as fh:
             fh.seek(0)
             ident = ElfIdent.from_fileobj(fh)
-        if (ident.ei_mag0, ident.ei_mag1, ident.ei_mag2, ident.ei_mag3) != (b"0x7f", b"E", b"L", b"F"):
+        if (ident.ei_mag0, ident.ei_mag1, ident.ei_mag2, ident.ei_mag3) != ELF_MAGIC:
             raise ValueError("Not an ELF file")
         return ident
 
@@ -297,6 +300,17 @@ class ElfFile:
         with self._peek() as fh:
             fh.seek(name_pos)
             return read_c_str(fh)
+
+    def guess_page_size(self) -> int:
+        """Guess the page size from existing PT_LOAD headers. Else default to 0x1000."""
+        page_size = 0
+
+        for phdr in self.phdrs:
+            if phdr.p_type == PT_LOAD:
+                page_size = max(page_size, phdr.p_align)
+
+        # Default to 0x1000
+        return page_size or 0x1000
 
 
 def read_c_str(fh: BinaryIO) -> bytes:
