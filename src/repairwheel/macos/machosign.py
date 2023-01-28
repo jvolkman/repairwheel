@@ -32,9 +32,9 @@ from macholib.ptypes import p_uint32
 from macholib.ptypes import p_uint64
 from macholib.ptypes import sizeof
 
-from .fileutil import fmove
-from .fileutil import fzero
-from .fileutil import open_create
+from ..fileutil import fmove
+from ..fileutil import fzero
+from ..fileutil import open_create
 
 # References:
 # https://developer.apple.com/documentation/technotes/tn3126-inside-code-signing-hashes
@@ -247,7 +247,7 @@ class SuperBlob:
             execsegflags=CS_EXECSEG_MAIN_BINARY if self.is_executable else 0,
         )
 
-        if self.code_limit <= 2**32:
+        if self.code_limit <= 2 ** 32:
             dir.codelimit = self.code_limit
             dir.codelimit64 = 0
         else:

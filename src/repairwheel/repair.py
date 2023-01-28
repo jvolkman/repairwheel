@@ -20,8 +20,8 @@ def fatal(message: str) -> NoReturn:
 def make_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
 
-    parser.add_argument('wheel', type=Path)
-    parser.add_argument('-o', '--output-dir', type=Path, required=True)
+    parser.add_argument("wheel", type=Path)
+    parser.add_argument("-o", "--output-dir", type=Path, required=True)
 
     return parser
 
@@ -54,7 +54,7 @@ def main():
     platforms = get_wheel_platforms(wheel)
     if not platforms:
         fatal(f"No platforms detected in wheel name: {wheel.name}")
-    
+
     if len(platforms) > 1:
         fatal(f"Multiple platforms detected in wheel name ({','.join(platforms)}); not sure what to do")
 
