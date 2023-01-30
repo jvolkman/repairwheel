@@ -1,4 +1,6 @@
 import os
+from threading import RLock
+from types import GenericAlias
 from typing import BinaryIO
 from typing import IO
 
@@ -45,3 +47,7 @@ def fmove(fh: BinaryIO, dst: int, src: int, length: int, bufsize: int = BUFSIZE)
             written = fh.write(buf)
 
             length -= written
+
+
+def round_to_multiple(num: int, multiple: int) -> int:
+    return ((num + multiple - 1) // multiple) * multiple

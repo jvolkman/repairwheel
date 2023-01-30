@@ -1,6 +1,6 @@
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import BinaryIO
+from typing import BinaryIO, Dict, Optional, Set
 from typing import List
 from typing import Union
 
@@ -14,6 +14,12 @@ from macholib.ptypes import p_uint64
 from macholib.ptypes import sizeof
 
 from ..fileutil import fzero
+from ..fileutil import round_to_multiple
+
+try:
+    from functools import cached_property
+except ImportError:
+    from ..compat import cached_property
 
 # http://blog.k3170makan.com/2018/09/introduction-to-elf-format-part-ii.html
 # https://www.cs.cmu.edu/afs/cs/academic/class/15213-f00/docs/elf.pdf
@@ -62,9 +68,12 @@ SHT_DYNAMIC = 6
 DT_NULL = 0
 DT_NEEDED = 1
 DT_STRTAB = 5
+DT_STRSZ = 10
 DT_SONAME = 14
 DT_RPATH = 15
 DT_RUNPATH = 29
+DT_VERNEED = 0x6FFFFFFE
+DT_VERNEEDNUM = 0x6FFFFFFF
 
 
 class ElfIdent(Structure):
@@ -266,10 +275,88 @@ class Elf64_Dyn_LE(Structure):
     _fields_ = _Elf64_Dyn_fields
 
 
+_Elf32_Verneed_fields = [
+    ("vn_version", Elf32_Half),
+    ("vn_cnt", Elf32_Half),
+    ("vn_file", Elf32_Word),
+    ("vn_aux", Elf32_Word),
+    ("vn_next", Elf32_Word),
+]
+
+
+class Elf32_Verneed_BE(Structure):
+    _endian_ = ">"
+    _fields_ = _Elf32_Verneed_fields
+
+
+class Elf32_Verneed_LE(Structure):
+    _endian_ = "<"
+    _fields_ = _Elf32_Verneed_fields
+
+
+_Elf64_Verneed_fields = [
+    ("vn_version", Elf64_Half),
+    ("vn_cnt", Elf64_Half),
+    ("vn_file", Elf64_Word),
+    ("vn_aux", Elf64_Word),
+    ("vn_next", Elf64_Word),
+]
+
+
+class Elf64_Verneed_BE(Structure):
+    _endian_ = ">"
+    _fields_ = _Elf64_Verneed_fields
+
+
+class Elf64_Verneed_LE(Structure):
+    _endian_ = "<"
+    _fields_ = _Elf64_Verneed_fields
+
+
+_Elf32_Vernaux_fields = [
+    ("vna_hash", Elf32_Word),
+    ("vna_flags", Elf32_Half),
+    ("vna_other", Elf32_Half),
+    ("vna_name", Elf32_Word),
+    ("vna_next", Elf32_Word),
+]
+
+
+class Elf32_Vernaux_BE(Structure):
+    _endian_ = ">"
+    _fields_ = _Elf32_Vernaux_fields
+
+
+class Elf32_Vernaux_LE(Structure):
+    _endian_ = "<"
+    _fields_ = _Elf32_Vernaux_fields
+
+
+_Elf64_Vernaux_fields = [
+    ("vna_hash", Elf64_Word),
+    ("vna_flags", Elf64_Half),
+    ("vna_other", Elf64_Half),
+    ("vna_name", Elf64_Word),
+    ("vna_next", Elf64_Word),
+]
+
+
+class Elf64_Vernaux_BE(Structure):
+    _endian_ = ">"
+    _fields_ = _Elf64_Vernaux_fields
+
+
+class Elf64_Vernaux_LE(Structure):
+    _endian_ = "<"
+    _fields_ = _Elf64_Vernaux_fields
+
+
 Elf_Ehdr = Union[Elf32_Ehdr_BE, Elf32_Ehdr_LE, Elf64_Ehdr_BE, Elf64_Ehdr_LE]
 Elf_Phdr = Union[Elf32_Phdr_BE, Elf32_Phdr_LE, Elf64_Phdr_BE, Elf64_Phdr_LE]
 Elf_Shdr = Union[Elf32_Shdr_BE, Elf32_Shdr_LE, Elf64_Shdr_BE, Elf64_Shdr_LE]
 Elf_Dyn = Union[Elf32_Dyn_BE, Elf32_Dyn_LE, Elf64_Dyn_BE, Elf64_Dyn_LE]
+Elf_Verneed = Union[Elf32_Verneed_BE, Elf32_Verneed_LE, Elf64_Verneed_BE, Elf64_Verneed_LE]
+Elf_Vernaux = Union[Elf32_Vernaux_BE, Elf32_Vernaux_LE, Elf64_Vernaux_BE, Elf64_Vernaux_LE]
 
 
 @dataclass
@@ -278,6 +365,8 @@ class ElfClass:
     Phdr: Elf_Phdr
     Shdr: Elf_Shdr
     Dyn: Elf_Dyn
+    Verneed: Elf_Verneed
+    Vernaux: Elf_Vernaux
 
 
 ELF32_CLASS_BE = ElfClass(
@@ -285,6 +374,8 @@ ELF32_CLASS_BE = ElfClass(
     Phdr=Elf32_Phdr_BE,
     Shdr=Elf32_Shdr_BE,
     Dyn=Elf32_Dyn_BE,
+    Verneed=Elf32_Verneed_BE,
+    Vernaux=Elf32_Vernaux_BE,
 )
 
 ELF32_CLASS_LE = ElfClass(
@@ -292,6 +383,8 @@ ELF32_CLASS_LE = ElfClass(
     Phdr=Elf32_Phdr_LE,
     Shdr=Elf32_Shdr_LE,
     Dyn=Elf32_Dyn_LE,
+    Verneed=Elf32_Verneed_LE,
+    Vernaux=Elf32_Vernaux_LE,
 )
 
 ELF64_CLASS_BE = ElfClass(
@@ -299,6 +392,8 @@ ELF64_CLASS_BE = ElfClass(
     Phdr=Elf64_Phdr_BE,
     Shdr=Elf64_Shdr_BE,
     Dyn=Elf64_Dyn_BE,
+    Verneed=Elf64_Verneed_BE,
+    Vernaux=Elf64_Vernaux_BE,
 )
 
 ELF64_CLASS_LE = ElfClass(
@@ -306,28 +401,51 @@ ELF64_CLASS_LE = ElfClass(
     Phdr=Elf64_Phdr_LE,
     Shdr=Elf64_Shdr_LE,
     Dyn=Elf64_Dyn_LE,
+    Verneed=Elf64_Verneed_LE,
+    Vernaux=Elf64_Vernaux_LE,
 )
 
 
-# Copy phdrs
-## Update PT_PHDR
-# Copy shdrs
-# Copy .dynamic
-# Copy .dynstr
-# Copy .gnu.version_r
-
-## Update PT_DYNAMIC
-## Update SHT_DYNAMIC
-### Update SHT_DYNAMIC.sh_link -> index of dynstr
-# Update SHT_STRTAB
-# Update DT_STRTAB
+@dataclass
+class VerneedEntry:
+    verneed: Elf_Verneed
+    vernaux: List[Elf_Vernaux]
+    verneed_name: bytes
+    vernaux_names: List[bytes]
 
 
-##
+@dataclass
+class OffsetAndLength:
+    offset: int
+    length: int
 
 
-def round_to_multiple(num: int, multiple: int) -> int:
-    return ((num + multiple - 1) // multiple) * multiple
+class PositionTracker:
+    def __init__(self, file_offset: int, vm_offset: int):
+        self._file_start = file_offset
+        self.file_offset = file_offset
+        self.vm_offset = vm_offset
+
+    def add(self, count: int) -> None:
+        self.file_offset += count
+        self.vm_offset += count
+    
+    def round(self, align: int) -> None:
+        self.file_offset = round_to_multiple(self.file_offset, align)
+        self.vm_offset = round_to_multiple(self.vm_offset, align)
+
+    @property
+    def buf_offset(self) -> int:
+        return self.file_offset - self._file_start
+
+
+@dataclass
+class Dynstr:
+    strtab: bytes
+    soname_pos: int
+    rpath_pos: int
+    needed_pos: Dict[bytes, int]
+    vernaux_pos: Dict[bytes, int]
 
 
 class ElfFile:
@@ -357,7 +475,16 @@ class ElfFile:
         yield self._fh
         self._fh.seek(pos)
 
-    @property
+    def _clear_read_cache(self) -> None:
+        # Deletes all of the @cached_property methods.
+        for k, v in self.__class__.__dict__.items():
+            if v.__class__.__name__ == "cached_property":
+                try:
+                    delattr(self, k)
+                except AttributeError:
+                    pass
+
+    @cached_property
     def ident(self) -> ElfIdent:
         with self._peek() as fh:
             fh.seek(0)
@@ -366,13 +493,13 @@ class ElfFile:
             raise ValueError("Not an ELF file")
         return ident
 
-    @property
+    @cached_property
     def ehdr(self) -> Elf_Ehdr:
         with self._peek() as fh:
             fh.seek(0)
             return self._class.Ehdr.from_fileobj(fh)
 
-    @property
+    @cached_property
     def phdrs(self) -> List[Elf_Phdr]:
         h = self.ehdr
         # Sanity check header size
@@ -392,7 +519,7 @@ class ElfFile:
 
         return result
 
-    @property
+    @cached_property
     def shdrs(self) -> List[Elf_Shdr]:
         h = self.ehdr
 
@@ -422,10 +549,23 @@ class ElfFile:
 
         return result
 
-    @property
-    def dyn(self) -> List[Elf_Dyn]:
+    @cached_property
+    def shdr_names(self) -> List[bytes]:
+        ehdr = self.ehdr
         shdrs = self.shdrs
-        for shdr in shdrs:
+        strtab_off = shdrs[ehdr.e_shstrndx].sh_offset
+        result = []
+        with self._peek() as fh:
+            for shdr in shdrs:
+                name_pos = strtab_off + shdr.sh_name
+                fh.seek(name_pos)
+                result.append(read_c_str(fh))
+
+        return result
+
+    @cached_property
+    def dyn(self) -> List[Elf_Dyn]:
+        for shdr in self.shdrs:
             if shdr.sh_type == SHT_DYNAMIC:
                 dyn_pos = shdr.sh_offset
                 break
@@ -443,14 +583,70 @@ class ElfFile:
 
         return result
 
-    def shdr_name(self, index) -> bytes:
-        ehdr = self.ehdr
-        shdrs = self.shdrs
-        strtab_off = shdrs[ehdr.e_shstrndx].sh_offset
-        name_pos = strtab_off + self.shdrs[index].sh_name
+    @cached_property
+    def dynstr(self) -> bytes:
+        # Find dynstr
+        dynstr_pos = -1
+        dynstr_size = -1
+        for d in self.dyn:
+            if d.d_tag == DT_STRTAB:
+                dynstr_pos = d.d_ptr_or_val
+            elif d.d_tag == DT_STRSZ:
+                dynstr_size = d.d_ptr_or_val
+
+        # Sanity check to make sure the .dynstr section agrees with DT_STRTAB and DT_STRSZ.
+        dynstr_shdr = self.get_shdr(".dynstr")
+        if dynstr_pos != dynstr_shdr.sh_offset or dynstr_size != dynstr_shdr.sh_size:
+            raise ValueError("DT_STRTAB and DT_STRSZ do not agree with .dynstr")
+
         with self._peek() as fh:
-            fh.seek(name_pos)
-            return read_c_str(fh)
+            fh.seek(dynstr_pos)
+            dynstr = fh.read(dynstr_size)
+
+        return dynstr
+
+    @cached_property
+    def verneed_entries(self) -> List[VerneedEntry]:
+        verneed_pos = None
+        verneed_num = None
+        for d in self.dyn:
+            if d.d_tag == DT_VERNEED:
+                verneed_pos = d.d_ptr_or_val
+            elif d.d_tag == DT_VERNEEDNUM:
+                verneed_num = d.d_ptr_or_val
+
+        result = []
+        verneed_shdr = self.find_shdr(".gnu.version_r")
+        if verneed_pos and verneed_num and verneed_shdr:
+            # We get the string table index from the corresponding verneed section's sh_link
+            verneed_strtab_shdr = self.shdrs[verneed_shdr.sh_link]
+            with self._peek() as fh:
+                fh.seek(verneed_strtab_shdr.sh_offset)
+                vn_strtab = fh.read(verneed_strtab_shdr.sh_size)
+                while verneed_num:
+                    fh.seek(verneed_pos)
+                    cur_need = self._class.Verneed.from_fileobj(fh)
+                    cur_need_name = get_strtab_entry(vn_strtab, cur_need.vn_file)
+                    aux = []
+                    aux_names = []
+                    aux_count = cur_need.vn_cnt
+                    aux_pos = verneed_pos + cur_need.vn_aux
+                    while aux_count:
+                        fh.seek(aux_pos)
+                        cur_aux = self._class.Vernaux.from_fileobj(fh)
+                        cur_aux_name = get_strtab_entry(vn_strtab, cur_aux.vna_name)
+                        aux_pos += cur_aux.vna_next
+                        aux_count -= 1
+                        aux.append(cur_aux)
+                        aux_names.append(cur_aux_name)
+
+                    result.append(
+                        VerneedEntry(verneed=cur_need, vernaux=aux, verneed_name=cur_need_name, vernaux_names=aux_names)
+                    )
+                    verneed_pos += cur_need.vn_next
+                    verneed_num -= 1
+
+        return result
 
     def guess_page_size(self) -> int:
         """Guess the page size from existing PT_LOAD headers. Else default to 0x1000."""
@@ -462,6 +658,153 @@ class ElfFile:
 
         # Default to 0x1000
         return page_size or 0x1000
+
+    def _write_dynstr(self, buf: BinaryIO, pos: PositionTracker, strtab: bytes) -> OffsetAndLength:
+        shdr_dynstr = self.get_shdr(".dynstr")
+        pos.round(shdr_dynstr.sh_addralign)
+        dynstr_pos = OffsetAndLength(pos.file_offset, len(strtab))
+        buf.seek(pos.buf_offset)
+        buf.write(strtab)
+        pos.add(len(strtab))
+        return dynstr_pos
+
+    def _write_verneed(self, buf: BinaryIO, pos: PositionTracker, dynstr: Dynstr, needed_replacements: Dict[bytes, bytes]) -> OffsetAndLength:
+        shdr_verneed = self.get_shdr(".gnu.version_r")
+        pos.round(shdr_verneed.sh_addralign)
+        verneed_start = pos.file_offset
+        verneed_entries = self.verneed_entries
+        
+
+        raise NotImplemented
+
+    def _write_dyn(self, buf: BinaryIO, pos: PositionTracker)  -> OffsetAndLength:
+        pass
+
+    def _write_new_trailer(
+        self,
+        buf: BinaryIO,
+        file_offset: int,
+        vm_offset: int,
+        new_soname: Optional[bytes] = None,
+        new_rpath: Optional[bytes] = None,
+        needed_replacements: Dict[bytes, bytes] = {},
+    ):
+        cur_needed_names = []
+        cur_rpath = b""
+        cur_runpath = b""
+        cur_soname = b""
+        new_dyn = []
+        for d in self.dyn:
+            if d.d_tag == DT_NEEDED:
+                cur_needed_names.append(get_strtab_entry(self.dynstr, d.d_ptr_or_val))
+            elif d.d_tag == DT_SONAME:
+                cur_soname = get_strtab_entry(self.dynstr, d.d_ptr_or_val)
+            elif d.d_tag == DT_RPATH:
+                cur_rpath = get_strtab_entry(self.dynstr, d.d_ptr_or_val)
+            elif d.d_tag == DT_RUNPATH:
+                cur_runpath = get_strtab_entry(self.dynstr, d.d_ptr_or_val)
+            elif d.d_tag == DT_VERNEED:
+                pass  # We'll rewrite this.
+            elif d.d_tag == DT_VERNEEDNUM:
+                pass  # We'll rewrite this.
+            else:
+                new_dyn.append(d)  # Keep everything else in the new dyn list.
+
+        cur_verneed_names = [ve.verneed_name for ve in self.verneed_entries]
+        all_verneed_versions = {aux for ve in self.verneed_entries for aux in ve.vernaux_names}
+
+        # Unpatched binaries might have runpath, which takes precedence over rpath.
+        # After patching, we'll have removed the runpath.
+        if cur_runpath:
+            cur_rpath = cur_runpath
+
+        # If new values weren't specified, we'll rewrite the current values.
+        new_soname = new_soname or cur_soname
+        new_rpath = new_rpath or cur_rpath
+
+        # Update our DT_NEEDED and DT_VERNEED lists
+        new_needed_names = [needed_replacements.get(e, e) for e in cur_needed_names]
+        new_verneed_names = [needed_replacements.get(e, e) for e in cur_verneed_names]
+
+        # Next we need to figure out if we can replace the end of .dynstr.
+        # We expect .dynstr to end with a substring starting with $PATCH$\0,
+        # followed by our SONAME, RPATH, and needed paths (shared between
+        # DT_NEEDED and DT_VERNEED). If not, we just append to .dynstr and leave
+        # everything else.
+        expected_dynstr_suffix = build_dynstr(
+            cur_soname, cur_rpath, set(cur_needed_names + cur_verneed_names), all_verneed_versions
+        )
+
+        # See if .dynstr ends with what we expect. If there's stuff before our prefix, we expect
+        # a null byte that follows the last existing entry.
+        if self.dynstr == expected_dynstr_suffix.strtab or self.dynstr.endswith(b"\0" + expected_dynstr_suffix.strtab):
+            new_dynstr_prefix = self.dynstr[: -len(expected_dynstr_suffix.strtab)]
+        else:
+            new_dynstr_prefix = self.dynstr
+
+        # Construct the new .dynstr on top of whatever prefix we determined.
+        new_dynstr = build_dynstr(
+            new_soname, new_rpath, set(new_needed_names + new_verneed_names), all_verneed_versions, prefix=new_dynstr_prefix
+        )
+
+        # Now we can write to our new buffer
+        pos = PositionTracker(file_offset, vm_offset)
+
+        dynstr_pos = self._write_dynstr(buf, pos, new_dynstr.strtab)
+        if self.verneed_entries:
+            verneed_pos = self._write_verneed(buf, pos)
+        else:
+            verneed_pos = None
+        dyn_pos = self._write_dyn(buf, pos)
+
+        # write shdrs
+        # write phdrs
+
+
+
+
+
+
+        # Now:
+        #  Add DT_SONAME
+        #  Add DT_RPATH
+        #  Add DT_NEEDED for each entry
+
+        # Find the current soname
+
+        # Find the current runpath/rpath
+        # Find the current dt_needed
+        # Find the current verneed
+
+        # Copy phdrs
+        ## Update PT_PHDR
+        # Copy shdrs
+        # Copy .dynamic
+        # Copy .dynstr
+        # Copy .gnu.version_r
+
+        ## Update PT_DYNAMIC
+        ## Update .dynamic
+        ### Update .dynamic -> sh_link -> index of .dynstr
+
+        # Update DT_STRTAB + DT_STRSZ -> .dynstr
+
+        # https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=820334#5
+
+        ##
+
+    def get_shdr(self, name: str) -> Elf_Shdr:
+        s = self.find_shdr(name)
+        if not s:
+            raise ValueError("Section not found: " + name)
+        return s
+
+    def find_shdr(self, name: str) -> Optional[Elf_Shdr]:
+        name_bytes = name.encode("utf-8")
+        for shdr, shdr_name in zip(self.shdrs, self.shdr_names):
+            if shdr_name == name_bytes:
+                return shdr
+        return None
 
     def relocate_phdrs(self):
         self._fh.seek(0, 2)
@@ -525,13 +868,40 @@ def read_c_str(fh: BinaryIO) -> bytes:
             return data
 
         data += read
-        null_pos = data.find(b"\0")
+        null_pos = data.find(0)
         if null_pos >= 0:
             data = data[:null_pos]
             fh.seek(start + len(data) + 1)  # Seek after the null
             break
 
     return data
+
+
+def get_strtab_entry(strtab: bytes, start: int) -> bytes:
+    end = start
+    while end < len(strtab) and strtab[end] != 0:
+        end += 1
+    return strtab[start:end]
+
+
+def build_dynstr(soname: bytes, rpath: bytes, needed: Set[bytes], vernaux_versions: Set[bytes], prefix=b"") -> Dynstr:
+    result = prefix + b"$PATCH$\0"
+    soname_pos = len(result)
+    result += soname + b"\0"
+    rpath_pos = len(result)
+    result += rpath + b"\0"
+
+    needed_pos = {}
+    for needed_entry in sorted(needed):
+        needed_pos[needed_entry] = len(result)
+        result += needed_entry + b"\0"
+
+    vernaux_pos = {}
+    for vernaux_entry in sorted(vernaux_versions):
+        vernaux_pos[vernaux_entry] = len(result)
+        result += vernaux_entry + b"\0"
+
+    return Dynstr(result, soname_pos, rpath_pos, needed_pos, vernaux_pos)
 
 
 if __name__ == "__main__":
