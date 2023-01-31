@@ -1,6 +1,8 @@
 from contextlib import contextmanager
+import copy
 from dataclasses import dataclass
-from typing import BinaryIO, Dict, Optional, Set
+import io
+from typing import BinaryIO, Dict, Generator, Optional, Set, Tuple
 from typing import List
 from typing import Union
 
@@ -57,6 +59,7 @@ PT_SHLIB = 5  # Reserved
 PT_PHDR = 6  # Entry for header table itself
 PT_TLS = 7  # Thread-local storage segment
 PT_NUM = 8  # Number of defined types
+PT_GNU_RELRO = 0x6474e552
 
 PF_R = 0x4
 PF_W = 0x2
@@ -361,6 +364,7 @@ Elf_Vernaux = Union[Elf32_Vernaux_BE, Elf32_Vernaux_LE, Elf64_Vernaux_BE, Elf64_
 
 @dataclass
 class ElfClass:
+    alignment: int
     Ehdr: Elf_Ehdr
     Phdr: Elf_Phdr
     Shdr: Elf_Shdr
@@ -370,6 +374,7 @@ class ElfClass:
 
 
 ELF32_CLASS_BE = ElfClass(
+    alignment=sizeof(Elf32_Off),
     Ehdr=Elf32_Ehdr_BE,
     Phdr=Elf32_Phdr_BE,
     Shdr=Elf32_Shdr_BE,
@@ -379,6 +384,7 @@ ELF32_CLASS_BE = ElfClass(
 )
 
 ELF32_CLASS_LE = ElfClass(
+    alignment=sizeof(Elf32_Off),
     Ehdr=Elf32_Ehdr_LE,
     Phdr=Elf32_Phdr_LE,
     Shdr=Elf32_Shdr_LE,
@@ -388,6 +394,7 @@ ELF32_CLASS_LE = ElfClass(
 )
 
 ELF64_CLASS_BE = ElfClass(
+    alignment=sizeof(Elf64_Off),
     Ehdr=Elf64_Ehdr_BE,
     Phdr=Elf64_Phdr_BE,
     Shdr=Elf64_Shdr_BE,
@@ -397,6 +404,7 @@ ELF64_CLASS_BE = ElfClass(
 )
 
 ELF64_CLASS_LE = ElfClass(
+    alignment=sizeof(Elf64_Off),
     Ehdr=Elf64_Ehdr_LE,
     Phdr=Elf64_Phdr_LE,
     Shdr=Elf64_Shdr_LE,
@@ -415,28 +423,53 @@ class VerneedEntry:
 
 
 @dataclass
-class OffsetAndLength:
-    offset: int
+class SectionInfo:
+    file_offset: int
+    vm_offset: int
     length: int
+    count: Optional[int] = None
 
 
 class PositionTracker:
     def __init__(self, file_offset: int, vm_offset: int):
-        self._file_start = file_offset
+        self.file_start = file_offset
+        self.vm_start = vm_offset
         self.file_offset = file_offset
+        self.max_file_offset = file_offset
         self.vm_offset = vm_offset
+        self.max_vm_offset = vm_offset
 
     def add(self, count: int) -> None:
         self.file_offset += count
+        self.max_file_offset = max(self.file_offset, self.max_file_offset)
         self.vm_offset += count
-    
+        self.max_vm_offset = max(self.vm_offset, self.max_vm_offset)
+
     def round(self, align: int) -> None:
+        if not align:
+            # An alignment of 0 or 1 mean no alignment.
+            # But passing 0 to round_to_multiple will cause ZeroDivisionError.
+            align = 1
         self.file_offset = round_to_multiple(self.file_offset, align)
+        self.max_file_offset = max(self.file_offset, self.max_file_offset)
         self.vm_offset = round_to_multiple(self.vm_offset, align)
+        self.max_vm_offset = max(self.vm_offset, self.max_vm_offset)
+
+    def back_to_start(self) -> None:
+        self.file_offset = self.file_start
+        self.vm_offset = self.vm_start
 
     @property
     def buf_offset(self) -> int:
-        return self.file_offset - self._file_start
+        return self.file_offset - self.file_start
+
+    @property
+    def file_size(self) -> int:
+        return self.max_file_offset - self.file_start
+
+    @property
+    def vm_size(self) -> int:
+        return self.max_vm_offset - self.vm_start
 
 
 @dataclass
@@ -469,14 +502,16 @@ class ElfFile:
         }[(ident.ei_class, ident.ei_data)]
 
     @contextmanager
-    def _peek(self) -> BinaryIO:
+    def _peek(self) -> Generator[BinaryIO, None, None]:
         """Yields self._fh and resets to its original position upon exit."""
         pos = self._fh.tell()
-        yield self._fh
-        self._fh.seek(pos)
+        try:
+            yield self._fh
+        finally:
+            self._fh.seek(pos)
 
     def _clear_read_cache(self) -> None:
-        # Deletes all of the @cached_property methods.
+        # Deletes all of the @cached_property values.
         for k, v in self.__class__.__dict__.items():
             if v.__class__.__name__ == "cached_property":
                 try:
@@ -595,7 +630,7 @@ class ElfFile:
                 dynstr_size = d.d_ptr_or_val
 
         # Sanity check to make sure the .dynstr section agrees with DT_STRTAB and DT_STRSZ.
-        dynstr_shdr = self.get_shdr(".dynstr")
+        dynstr_shdr = self.get_shdr(b".dynstr")
         if dynstr_pos != dynstr_shdr.sh_offset or dynstr_size != dynstr_shdr.sh_size:
             raise ValueError("DT_STRTAB and DT_STRSZ do not agree with .dynstr")
 
@@ -616,7 +651,7 @@ class ElfFile:
                 verneed_num = d.d_ptr_or_val
 
         result = []
-        verneed_shdr = self.find_shdr(".gnu.version_r")
+        verneed_shdr = self.find_shdr(b".gnu.version_r")
         if verneed_pos and verneed_num and verneed_shdr:
             # We get the string table index from the corresponding verneed section's sh_link
             verneed_strtab_shdr = self.shdrs[verneed_shdr.sh_link]
@@ -659,26 +694,232 @@ class ElfFile:
         # Default to 0x1000
         return page_size or 0x1000
 
-    def _write_dynstr(self, buf: BinaryIO, pos: PositionTracker, strtab: bytes) -> OffsetAndLength:
-        shdr_dynstr = self.get_shdr(".dynstr")
+    def _write_dynstr(self, buf: BinaryIO, pos: PositionTracker, dynstr: Dynstr) -> SectionInfo:
+        shdr_dynstr = self.get_shdr(b".dynstr")
         pos.round(shdr_dynstr.sh_addralign)
-        dynstr_pos = OffsetAndLength(pos.file_offset, len(strtab))
+        dynstr_pos = SectionInfo(pos.file_offset, pos.vm_offset, len(dynstr.strtab))
         buf.seek(pos.buf_offset)
-        buf.write(strtab)
-        pos.add(len(strtab))
+        buf.write(dynstr.strtab)
+        pos.add(len(dynstr.strtab))
         return dynstr_pos
 
-    def _write_verneed(self, buf: BinaryIO, pos: PositionTracker, dynstr: Dynstr, needed_replacements: Dict[bytes, bytes]) -> OffsetAndLength:
-        shdr_verneed = self.get_shdr(".gnu.version_r")
+    def _write_verneed(
+        self, buf: BinaryIO, pos: PositionTracker, dynstr: Dynstr, needed_replacements: Dict[bytes, bytes]
+    ) -> SectionInfo:
+        shdr_verneed = self.get_shdr(b".gnu.version_r")
         pos.round(shdr_verneed.sh_addralign)
-        verneed_start = pos.file_offset
+        verneed_file_offset = pos.file_offset
+        verneed_vm_offset = pos.vm_offset
         verneed_entries = self.verneed_entries
-        
 
-        raise NotImplemented
+        buf.seek(pos.buf_offset)
+        buf_start = buf.tell()
+        for vn_index, vn in enumerate(verneed_entries):
+            vn_struct = copy.deepcopy(vn.verneed)  # copy because we're going to modify it.
+            new_name = needed_replacements.get(vn.verneed_name, vn.verneed_name)
+            vn_struct.vn_file = dynstr.needed_pos[new_name]
+            if vn.vernaux:
+                vn_struct.vn_aux = sizeof(self._class.Verneed)
+            else:
+                vn_struct.vn_aux = 0
+            if vn_index < len(verneed_entries) - 1:
+                vn_struct.vn_next = sizeof(self._class.Verneed) + sizeof(self._class.Vernaux) * len(vn.vernaux)
+            else:
+                vn_struct.vn_next = 0
+            vn_struct.to_fileobj(buf)
 
-    def _write_dyn(self, buf: BinaryIO, pos: PositionTracker)  -> OffsetAndLength:
-        pass
+            for vna_index, (vna_struct, vna_name) in enumerate(zip(vn.vernaux, vn.vernaux_names)):
+                vna_struct = copy.deepcopy(vna_struct)
+                vna_struct.vna_name = dynstr.vernaux_pos[vna_name]
+                if vna_index < len(vn.vernaux) - 1:
+                    vna_struct.vna_next = sizeof(self._class.Vernaux)
+                else:
+                    vna_struct.vna_next = 0
+                vna_struct.to_fileobj(buf)
+
+        written_len = buf.tell() - buf_start
+        pos.add(written_len)
+
+        return SectionInfo(verneed_file_offset, verneed_vm_offset, written_len, len(verneed_entries))
+
+    def _write_dynamic(
+        self,
+        buf: BinaryIO,
+        pos: PositionTracker,
+        dynstr: Dynstr,
+        soname: bytes,
+        rpath: bytes,
+        needed: List[bytes],
+        dynstr_pos: SectionInfo,
+        verneed_pos: Optional[SectionInfo],
+    ) -> SectionInfo:
+        shdr_dynamic = self.get_shdr(b".dynamic")
+        pos.round(shdr_dynamic.sh_addralign)
+        dyn_file_offset = pos.file_offset
+        dyn_vm_offset = pos.vm_offset
+
+        buf.seek(pos.buf_offset)
+        buf_start = buf.tell()
+
+        # Write out all of the entries that we're not mucking with first.
+        # TODO: Handle DT_MIPS_RLD_MAP_REL. https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=820334#5
+        for d in self.dyn:
+            if d.d_tag not in [
+                DT_STRTAB,
+                DT_STRSZ,
+                DT_NEEDED,
+                DT_SONAME,
+                DT_RPATH,
+                DT_RUNPATH,
+                DT_VERNEED,
+                DT_VERNEEDNUM,
+                DT_NULL,
+            ]:
+                d.to_fileobj(buf)
+
+        self._class.Dyn(
+            d_tag=DT_STRTAB,
+            d_ptr_or_val=dynstr_pos.vm_offset,
+        ).to_fileobj(buf)
+
+        self._class.Dyn(
+            d_tag=DT_STRSZ,
+            d_ptr_or_val=dynstr_pos.length,
+        ).to_fileobj(buf)
+
+        if soname:
+            self._class.Dyn(
+                d_tag=DT_SONAME,
+                d_ptr_or_val=dynstr.soname_pos,
+            ).to_fileobj(buf)
+
+        if rpath:
+            self._class.Dyn(
+                d_tag=DT_RPATH,
+                d_ptr_or_val=dynstr.rpath_pos,
+            ).to_fileobj(buf)
+
+        for needed_name in needed:
+            self._class.Dyn(
+                d_tag=DT_NEEDED,
+                d_ptr_or_val=dynstr.needed_pos[needed_name],
+            ).to_fileobj(buf)
+
+        if verneed_pos:
+            self._class.Dyn(
+                d_tag=DT_VERNEED,
+                d_ptr_or_val=verneed_pos.vm_offset,
+            ).to_fileobj(buf)
+
+            self._class.Dyn(
+                d_tag=DT_VERNEEDNUM,
+                d_ptr_or_val=verneed_pos.count,
+            ).to_fileobj(buf)
+
+        # End the section with DT_NULL
+        self._class.Dyn(
+            d_tag=DT_NULL,
+            d_ptr_or_val=0,
+        ).to_fileobj(buf)
+
+        written_len = buf.tell() - buf_start
+        pos.add(written_len)
+
+        return SectionInfo(dyn_file_offset, dyn_vm_offset, written_len)
+
+    def _write_shdrs(
+        self,
+        buf: BinaryIO,
+        pos: PositionTracker,
+        dynstr_pos: SectionInfo,
+        dynamic_pos: SectionInfo,
+        verneed_pos: Optional[SectionInfo],
+    ) -> SectionInfo:
+        pos.round(self._class.alignment)
+        shdr_file_offset = pos.file_offset
+        shdr_vm_offset = pos.vm_offset
+
+        buf.seek(pos.buf_offset)
+        buf_start = buf.tell()
+
+        dynstr_index = self.shdr_names.index(b".dynstr")  # We'll use this for sh_link in .dynamic and .gnu.version_r
+
+        for shdr, shdr_name in zip(self.shdrs, self.shdr_names):
+            shdr = copy.deepcopy(shdr)
+            if shdr_name == b".dynstr":
+                shdr.sh_addr = dynstr_pos.vm_offset
+                shdr.sh_offset = dynstr_pos.file_offset
+                shdr.sh_size = dynstr_pos.length
+            elif shdr_name == b".dynamic":
+                shdr.sh_addr = dynamic_pos.vm_offset
+                shdr.sh_offset = dynamic_pos.file_offset
+                shdr.sh_size = dynamic_pos.length
+                shdr.sh_link = dynstr_index
+            elif shdr_name == b".gnu.version_r":
+                shdr.sh_addr = verneed_pos.vm_offset
+                shdr.sh_offset = verneed_pos.file_offset
+                shdr.sh_size = verneed_pos.length
+                shdr.sh_link = dynstr_index
+                shdr.sh_info = verneed_pos.count
+
+            shdr.to_fileobj(buf)
+
+        written_len = buf.tell() - buf_start
+        pos.add(written_len)
+
+        return SectionInfo(shdr_file_offset, shdr_vm_offset, written_len, len(self.shdrs))
+
+    def _write_phdrs(self, buf: BinaryIO, pos: PositionTracker, dynamic_pos: SectionInfo, add_new_load: bool) -> SectionInfo:
+        pos.round(self._class.alignment)
+        phdr_file_offset = pos.file_offset
+        phdr_vm_offset = pos.vm_offset
+
+        buf.seek(pos.buf_offset)
+        buf_start = buf.tell()
+
+        phdr_count = len(self.phdrs)
+        for phdr in self.phdrs:
+            phdr = copy.deepcopy(phdr)
+            if phdr.p_type == PT_DYNAMIC:
+                phdr.p_offset = dynamic_pos.file_offset
+                phdr.p_vaddr = dynamic_pos.vm_offset
+                phdr.p_paddr = dynamic_pos.vm_offset
+                phdr.p_filesz = dynamic_pos.length
+                phdr.p_memsz = dynamic_pos.length
+            elif phdr.p_type == PT_PHDR:
+                phdr_size = sizeof(self._class.Phdr) * phdr_count
+                if add_new_load:
+                    phdr_size += sizeof(self._class.Phdr)
+                phdr.p_offset = phdr_file_offset
+                phdr.p_vaddr = phdr_vm_offset
+                phdr.p_paddr = phdr_vm_offset
+                phdr.p_filesz = phdr_size
+                phdr.p_memsz = phdr_size
+
+            phdr.to_fileobj(buf)
+
+        written_len = buf.tell() - buf_start
+        pos.add(written_len)
+
+        # We may need to add an additional PT_LOAD for our patches.
+        if add_new_load:
+            pos.add(sizeof(self._class.Phdr))
+            written_len += sizeof(self._class.Phdr)
+            phdr_count += 1
+
+            page_size = self.guess_page_size()
+            self._class.Phdr(
+                p_type=PT_LOAD,
+                p_flags=PF_R | PF_W,
+                p_offset=pos.file_start,
+                p_vaddr=pos.vm_start,
+                p_paddr=pos.vm_start,
+                p_filesz=pos.file_size,
+                p_memsz=pos.vm_size,
+                p_align=page_size,
+            ).to_fileobj(buf)
+
+        return SectionInfo(phdr_file_offset, phdr_vm_offset, written_len, phdr_count)
 
     def _write_new_trailer(
         self,
@@ -688,12 +929,12 @@ class ElfFile:
         new_soname: Optional[bytes] = None,
         new_rpath: Optional[bytes] = None,
         needed_replacements: Dict[bytes, bytes] = {},
-    ):
+        add_new_load: bool = False,
+    ) -> Tuple[SectionInfo, SectionInfo]:
         cur_needed_names = []
         cur_rpath = b""
         cur_runpath = b""
         cur_soname = b""
-        new_dyn = []
         for d in self.dyn:
             if d.d_tag == DT_NEEDED:
                 cur_needed_names.append(get_strtab_entry(self.dynstr, d.d_ptr_or_val))
@@ -703,12 +944,6 @@ class ElfFile:
                 cur_rpath = get_strtab_entry(self.dynstr, d.d_ptr_or_val)
             elif d.d_tag == DT_RUNPATH:
                 cur_runpath = get_strtab_entry(self.dynstr, d.d_ptr_or_val)
-            elif d.d_tag == DT_VERNEED:
-                pass  # We'll rewrite this.
-            elif d.d_tag == DT_VERNEEDNUM:
-                pass  # We'll rewrite this.
-            else:
-                new_dyn.append(d)  # Keep everything else in the new dyn list.
 
         cur_verneed_names = [ve.verneed_name for ve in self.verneed_entries]
         all_verneed_versions = {aux for ve in self.verneed_entries for aux in ve.vernaux_names}
@@ -750,59 +985,41 @@ class ElfFile:
         # Now we can write to our new buffer
         pos = PositionTracker(file_offset, vm_offset)
 
-        dynstr_pos = self._write_dynstr(buf, pos, new_dynstr.strtab)
+        self._write_phdrs(buf, pos, SectionInfo(0, 0, 0), add_new_load)
+
+        # .dynstr
+        dynstr_pos = self._write_dynstr(buf, pos, new_dynstr)
+
+        # .gnu.version_r
         if self.verneed_entries:
-            verneed_pos = self._write_verneed(buf, pos)
+            verneed_pos = self._write_verneed(buf, pos, new_dynstr, needed_replacements)
         else:
             verneed_pos = None
-        dyn_pos = self._write_dyn(buf, pos)
 
-        # write shdrs
-        # write phdrs
+        # .dynamic
+        dynamic_pos = self._write_dynamic(
+            buf, pos, new_dynstr, new_soname, new_rpath, new_needed_names, dynstr_pos, verneed_pos
+        )
 
+        # shdrs
+        shdr_pos = self._write_shdrs(buf, pos, dynstr_pos, dynamic_pos, verneed_pos)
 
+        # phdrs
+        pos.back_to_start()
+        phdr_pos = self._write_phdrs(buf, pos, dynamic_pos, add_new_load)
 
+        return phdr_pos, shdr_pos
 
-
-
-        # Now:
-        #  Add DT_SONAME
-        #  Add DT_RPATH
-        #  Add DT_NEEDED for each entry
-
-        # Find the current soname
-
-        # Find the current runpath/rpath
-        # Find the current dt_needed
-        # Find the current verneed
-
-        # Copy phdrs
-        ## Update PT_PHDR
-        # Copy shdrs
-        # Copy .dynamic
-        # Copy .dynstr
-        # Copy .gnu.version_r
-
-        ## Update PT_DYNAMIC
-        ## Update .dynamic
-        ### Update .dynamic -> sh_link -> index of .dynstr
-
-        # Update DT_STRTAB + DT_STRSZ -> .dynstr
-
-        # https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=820334#5
-
-        ##
-
-    def get_shdr(self, name: str) -> Elf_Shdr:
+    def get_shdr(self, name: bytes) -> Elf_Shdr:
         s = self.find_shdr(name)
         if not s:
             raise ValueError("Section not found: " + name)
         return s
 
-    def find_shdr(self, name: str) -> Optional[Elf_Shdr]:
-        name_bytes = name.encode("utf-8")
+    def find_shdr(self, name: bytes) -> Optional[Elf_Shdr]:
+        assert isinstance(name, bytes), "expected name to be of type bytes"
         for shdr, shdr_name in zip(self.shdrs, self.shdr_names):
-            if shdr_name == name_bytes:
+            if shdr_name == name:
                 return shdr
         return None
 
@@ -822,40 +1039,24 @@ class ElfFile:
         new_offset = round_to_multiple(file_end, page_size)
         new_vm_offset = round_to_multiple(vm_max, page_size)
 
-        new_header = self._class.Phdr(
-            p_type=PT_LOAD,
-            p_flags=PF_R | PF_W,
-            p_offset=new_offset,
-            p_vaddr=new_vm_offset,
-            p_paddr=new_vm_offset,
-            p_filesz=page_size,  # TODO: may not be large enough
-            p_memsz=page_size,
-            p_align=page_size,
-        )
-        phdrs.append(new_header)
-
-        # # Update the PT_PHDR entry if it exists.
-        for phdr in phdrs:
-            if phdr.p_type == PT_PHDR:
-                phdr.p_offset = new_header.p_offset
-                phdr.p_vaddr = new_header.p_vaddr
-                phdr.p_paddr = new_header.p_paddr
-                phdr.p_filesz = new_header.p_filesz
-                phdr.p_memsz = new_header.p_memsz
+        buf = io.BytesIO()
+        phdr_pos, shdr_pos = self._write_new_trailer(buf, new_offset, new_vm_offset, add_new_load=True)
 
         # Zero pad to the start of our new page
         fzero(self._fh, file_end, new_offset - file_end)
         self._fh.seek(new_offset)
 
-        # Write the new headers
-        for phdr in phdrs:
-            phdr.to_fileobj(self._fh)
+        self._fh.write(buf.getbuffer())
 
-        hdr = self.ehdr
-        hdr.e_phoff = new_offset
-        hdr.e_phnum = len(phdrs)
+        hdr = copy.deepcopy(self.ehdr)
+        hdr.e_phoff = phdr_pos.file_offset
+        hdr.e_phnum = phdr_pos.count
+        hdr.e_shoff = shdr_pos.file_offset
+        hdr.e_shnum = shdr_pos.count
         self._fh.seek(0)
         hdr.to_fileobj(self._fh)
+
+        self._clear_read_cache()
 
 
 def read_c_str(fh: BinaryIO) -> bytes:
