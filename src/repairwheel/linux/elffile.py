@@ -50,6 +50,8 @@ ELFCLASS64 = 2
 ELFDATA2LSB = 1  # 2's complement, little endian
 ELFDATA2MSB = 2  # 2's complement, big endian
 
+ET_DYN = 3  # Shared object file
+
 PT_NULL = 0  # Program header table entry unused
 PT_LOAD = 1  # Loadable program segment
 PT_DYNAMIC = 2  # Dynamic linking information
@@ -985,7 +987,7 @@ class ElfFile:
         # Now we can write to our new buffer
         pos = PositionTracker(file_offset, vm_offset)
 
-        self._write_phdrs(buf, pos, SectionInfo(0, 0, 0), add_new_load)
+        # self._write_phdrs(buf, pos, SectionInfo(0, 0, 0), add_new_load)
 
         # .dynstr
         dynstr_pos = self._write_dynstr(buf, pos, new_dynstr)
@@ -1005,7 +1007,7 @@ class ElfFile:
         shdr_pos = self._write_shdrs(buf, pos, dynstr_pos, dynamic_pos, verneed_pos)
 
         # phdrs
-        pos.back_to_start()
+        # pos.back_to_start()
         phdr_pos = self._write_phdrs(buf, pos, dynamic_pos, add_new_load)
 
         return phdr_pos, shdr_pos
@@ -1013,7 +1015,7 @@ class ElfFile:
     def get_shdr(self, name: bytes) -> Elf_Shdr:
         s = self.find_shdr(name)
         if not s:
-            raise ValueError("Section not found: " + name)
+            raise ValueError("Section not found: " + name.decode("utf-8"))
         return s
 
     def find_shdr(self, name: bytes) -> Optional[Elf_Shdr]:
@@ -1024,20 +1026,27 @@ class ElfFile:
         return None
 
     def relocate_phdrs(self):
+        if self.ehdr.e_type != ET_DYN:
+            raise ValueError("Not a dynamic file (ET_DYN)")
+
         self._fh.seek(0, 2)
         file_end = self._fh.tell()
         page_size = self.guess_page_size()
 
         phdrs = self.phdrs
+
         # First pass gets us the upper vmaddr
         vm_max = 0
         for phdr in phdrs:
-            vm_end = phdr.p_vaddr + phdr.p_memsz
-            if vm_end > vm_max:
-                vm_max = vm_end
+            if phdr.p_type == PT_LOAD:
+                vm_max = max(vm_max, phdr.p_vaddr + phdr.p_memsz)
 
-        new_offset = round_to_multiple(file_end, page_size)
-        new_vm_offset = round_to_multiple(vm_max, page_size)
+        # Our first section will be .dynstr. So let's align for that.
+        shdr_dynstr = self.get_shdr(b".dynstr")
+        new_offset = round_to_multiple(file_end, shdr_dynstr.sh_addralign or 1)
+
+        # Then make our vm addr match
+        new_vm_offset = congruent_vm_addr(new_offset, vm_max, page_size)
 
         buf = io.BytesIO()
         phdr_pos, shdr_pos = self._write_new_trailer(buf, new_offset, new_vm_offset, add_new_load=True)
@@ -1103,6 +1112,18 @@ def build_dynstr(soname: bytes, rpath: bytes, needed: Set[bytes], vernaux_versio
         result += vernaux_entry + b"\0"
 
     return Dynstr(result, soname_pos, rpath_pos, needed_pos, vernaux_pos)
+
+
+def congruent_vm_addr(file_offset: int, vm_start: int, page_size: int) -> int:
+    """Returns the vm addr >= vm_start where file_offset % page_size == val % page_size"""
+    fmod = file_offset % page_size
+    vmod = vm_start % page_size
+    if vmod < fmod:
+        return vm_start + (fmod - vmod)
+    elif vmod > fmod:
+        return vm_start + (page_size - (vmod - fmod))
+    else:
+        return vm_start
 
 
 if __name__ == "__main__":
