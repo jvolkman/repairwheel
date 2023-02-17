@@ -987,7 +987,7 @@ class ElfFile:
         # Now we can write to our new buffer
         pos = PositionTracker(file_offset, vm_offset)
 
-        # self._write_phdrs(buf, pos, SectionInfo(0, 0, 0), add_new_load)
+        self._write_phdrs(buf, pos, SectionInfo(0, 0, 0), add_new_load)
 
         # .dynstr
         dynstr_pos = self._write_dynstr(buf, pos, new_dynstr)
@@ -1007,7 +1007,7 @@ class ElfFile:
         shdr_pos = self._write_shdrs(buf, pos, dynstr_pos, dynamic_pos, verneed_pos)
 
         # phdrs
-        # pos.back_to_start()
+        pos.back_to_start()
         phdr_pos = self._write_phdrs(buf, pos, dynamic_pos, add_new_load)
 
         return phdr_pos, shdr_pos
@@ -1025,7 +1025,12 @@ class ElfFile:
                 return shdr
         return None
 
-    def relocate_phdrs(self):
+    def rewrite(
+        self,
+        new_soname: Optional[bytes] = None,
+        new_rpath: Optional[bytes] = None,
+        needed_replacements: Dict[bytes, bytes] = {},
+    ) -> None:
         if self.ehdr.e_type != ET_DYN:
             raise ValueError("Not a dynamic file (ET_DYN)")
 
@@ -1041,15 +1046,22 @@ class ElfFile:
             if phdr.p_type == PT_LOAD:
                 vm_max = max(vm_max, phdr.p_vaddr + phdr.p_memsz)
 
-        # Our first section will be .dynstr. So let's align for that.
-        shdr_dynstr = self.get_shdr(b".dynstr")
-        new_offset = round_to_multiple(file_end, shdr_dynstr.sh_addralign or 1)
+        # Our first section will be the PHDRs which are aligned to Elf_Off.
+        new_offset = round_to_multiple(file_end, self._class.alignment)
 
         # Then make our vm addr match
         new_vm_offset = congruent_vm_addr(new_offset, vm_max, page_size)
 
         buf = io.BytesIO()
-        phdr_pos, shdr_pos = self._write_new_trailer(buf, new_offset, new_vm_offset, add_new_load=True)
+        phdr_pos, shdr_pos = self._write_new_trailer(
+            buf=buf,
+            file_offset=new_offset,
+            vm_offset=new_vm_offset,
+            new_soname=new_soname,
+            new_rpath=new_rpath,
+            needed_replacements=needed_replacements,
+            add_new_load=True,
+        )
 
         # Zero pad to the start of our new page
         fzero(self._fh, file_end, new_offset - file_end)
@@ -1131,4 +1143,5 @@ if __name__ == "__main__":
 
     with open(sys.argv[1], "r+b") as f:
         ef = ElfFile(f)
-        ef.relocate_phdrs()
+        ef.rewrite(new_soname=b"foo")
+        ef.rewrite(new_rpath=b"/tmp")

@@ -21,5 +21,6 @@ tests/integration/
 .tox
 Dockerfile
 
-# Restore src/build in case user ignores 'build'
-!src/build
+# Development
+.vscode/
+env/

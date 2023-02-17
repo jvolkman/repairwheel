@@ -2,7 +2,7 @@ import argparse
 import os
 import sys
 from pathlib import Path
-from typing import NoReturn
+from typing import List, NoReturn
 from typing import Set
 
 from packaging.utils import parse_wheel_filename
@@ -14,7 +14,7 @@ from .windows import repair as windows_repair
 
 def fatal(message: str) -> NoReturn:
     print(message, file=sys.stderr)
-    os.exit(1)
+    sys.exit(1)
 
 
 def make_parser() -> argparse.ArgumentParser:
@@ -22,6 +22,7 @@ def make_parser() -> argparse.ArgumentParser:
 
     parser.add_argument("wheel", type=Path)
     parser.add_argument("-o", "--output-dir", type=Path, required=True)
+    parser.add_argument("-l", "--lib-dir", type=Path, action="append")
 
     return parser
 
@@ -48,6 +49,8 @@ def main():
 
     wheel: Path = args.wheel
     out: Path = args.output_dir
+    lib_path: List[Path] = args.lib_dir or []
+
     if not wheel.is_file():
         fatal(f"File does not exist: {wheel}")
 
@@ -70,7 +73,7 @@ def main():
     }[platform]
 
     out.mkdir(parents=True, exist_ok=True)
-    fn(wheel, out)
+    fn(wheel, out, lib_path)
 
 
 if __name__ == "__main__":
