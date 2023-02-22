@@ -1,15 +1,14 @@
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
-#include "simpledll.h"
+#include "testlib.h"
 
-static PyObject *simpleext_helloworld(PyObject *self, PyObject *args)
+static PyObject *simpleext_get_answer(PyObject *self, PyObject *args)
 {
-   helloworld();
-   Py_RETURN_NONE;
+   return PyLong_FromLong(get_answer());
 }
 
 static PyMethodDef SimpleExtMethods[] = {
-    {"helloworld", simpleext_helloworld, METH_NOARGS, NULL},
+    {"get_answer", simpleext_get_answer, METH_NOARGS, NULL},
     {NULL, NULL, 0, NULL}
 };
 

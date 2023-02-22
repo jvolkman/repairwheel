@@ -1,10 +1,8 @@
+import pathlib
 import sys
 from setuptools import setup, Extension
 
-if sys.maxsize > 2**32:
-    library_dirs = ['simpledll/x64/Release']
-else:
-    library_dirs = ['simpledll/Release']
+this_dir = pathlib.Path(__file__).parent
 
 setup(
     name='simpleext',
@@ -16,17 +14,16 @@ setup(
         'License :: OSI Approved :: MIT License',
         'Programming Language :: Python :: 3.10',
         'Programming Language :: Python :: Implementation :: CPython',
-        'Operating System :: Microsoft :: Windows',
     ],
     license='MIT',
     description='Simple extension module',
-    platforms='Windows',
     python_requires='==3.10.*',
     zip_safe=False,
     ext_modules=[Extension(
-        'simpleext', ['simpleext.c'],
-        include_dirs=['simpledll'],
-        libraries=['simpledll'],
-        library_dirs=library_dirs
+        name='simpleext',
+        sources=['simpleext.c'],
+        include_dirs=['testlib'],
+        library_dirs=['testlib'],
+        libraries=['testlib'],
     )]
 )
