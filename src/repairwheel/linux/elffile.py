@@ -61,7 +61,7 @@ PT_SHLIB = 5  # Reserved
 PT_PHDR = 6  # Entry for header table itself
 PT_TLS = 7  # Thread-local storage segment
 PT_NUM = 8  # Number of defined types
-PT_GNU_RELRO = 0x6474e552
+PT_GNU_RELRO = 0x6474E552
 
 PF_R = 0x4
 PF_W = 0x2

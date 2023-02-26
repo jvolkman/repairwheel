@@ -248,7 +248,7 @@ class SuperBlob:
             execsegflags=CS_EXECSEG_MAIN_BINARY if self.is_executable else 0,
         )
 
-        if self.code_limit <= 2 ** 32:
+        if self.code_limit <= 2**32:
             dir.codelimit = self.code_limit
             dir.codelimit64 = 0
         else:
