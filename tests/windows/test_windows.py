@@ -19,7 +19,7 @@ def is_mangled(filename: str) -> bool:
 def test_basic():
     """Basic repair for the iknowpy package"""
 
-    test_dir = pathlib.Path(__file__).parent
+    test_dir = pathlib.Path(__file__).parent.parent
 
     with tempfile.TemporaryDirectory() as tmp:
         tmp = pathlib.Path(tmp)
@@ -28,13 +28,15 @@ def test_basic():
             '-m', 
             'repairwheel',
             '--lib-dir',
-            test_dir / 'iknowpy',
-            test_dir / 'iknowpy'/ 'iknowpy-1.5.0-cp310-cp310-win_amd64.whl',
+            test_dir / 'testwheel' / 'lib',
+            test_dir / 'testwheel'/ 'testwheel-0.0.1-cp36-abi3-win_amd64.whl',
             '--output-dir',
             str(tmp),
         ])
-        with zipfile.ZipFile(tmp / 'iknowpy-1.5.0-cp310-cp310-win_amd64.whl') as wheel:
-            for path in zipfile.Path(wheel, 'iknowpy.libs/').iterdir():
-                if path.name in ('.load-order-iknowpy-1.5.0', 'concrt140.dll', 'msvcp140.dll'):
-                    continue
-                assert is_mangled(path.name), f'{path.name} is mangled'
+        with zipfile.ZipFile(tmp / 'testwheel-0.0.1-cp36-abi3-win_amd64.whl') as wheel:
+            for path in zipfile.Path(wheel, 'testwheel.libs/').iterdir():
+                if path.name.startswith("testdep-"):
+                    assert is_mangled(path.name), f'{path.name} is mangled'
+                    break
+            else:
+                assert False, "did not find testdep dll"
