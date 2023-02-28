@@ -7,7 +7,7 @@ import zipfile
 from pathlib import Path
 
 import pytest
-from packaging.tags import compatible_tags
+from packaging.tags import platform_tags
 from packaging.utils import parse_wheel_filename
 
 def _call_new_python(context, *py_args, **kwargs) -> bytes:
@@ -33,7 +33,7 @@ def test_wheel_contains_testdep(patched_wheel: Path) -> None:
 
 def test_wheel_installs_and_runs(patched_wheel: Path) -> None:
     _, _, _, wheel_tags = parse_wheel_filename(patched_wheel.name)
-    for sys_tag in compatible_tags():
+    for sys_tag in platform_tags():
         if sys_tag in wheel_tags:
             break
     else:
