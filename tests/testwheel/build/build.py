@@ -51,12 +51,12 @@ LINUX_BUILD = BuildInfo(
 MACOS_BUILD = BuildInfo(
     target="aarch64-macos",
     tag="cp36-abi3-macosx_11_0_arm64",
-    dep_cflags=["-shared", "-install_name", "libtestdep.dylib", "-headerpad_max_install_names"],
+    dep_cflags=["-shared", "-install_name", "libtestdep.dylib", "-Wl,-headerpad_max_install_names"],
     dep_name="libtestdep.dylib",
     ext_cflags=[
         "-shared",
         "-Wl,-undefined,dynamic_lookup",
-        "-headerpad_max_install_names",
+        "-Wl,-headerpad_max_install_names",
         "-I{pydir}/python/include/python3.10",
         "-I{testdep}",
         "-L{lib}",
