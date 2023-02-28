@@ -1,8 +1,25 @@
+import os
+import subprocess
 import sys
+import tempfile
+import venv
 import zipfile
 from pathlib import Path
 
 import pytest
+
+
+def _call_new_python(context, *py_args, **kwargs) -> bytes:
+    """Executes the newly created Python using safe-ish options"""
+    # Copied from stdlib venv module.
+    args = [context.env_exec_cmd, *py_args]
+    kwargs['env'] = env = os.environ.copy()
+    env['VIRTUAL_ENV'] = context.env_dir
+    env.pop('PYTHONHOME', None)
+    env.pop('PYTHONPATH', None)
+    kwargs['cwd'] = context.env_dir
+    kwargs['executable'] = context.env_exec_cmd
+    return subprocess.check_output(args, **kwargs)
 
 
 def test_wheel_contains_testdep(patched_wheel: Path) -> None:
@@ -27,30 +44,10 @@ def test_wheel_installs_and_runs(patched_wheel: Path) -> None:
     else:
         assert False, f"test cannot run on {sys.platform}"
 
-
-# def test_patched_testwheel_runs():
-#     """Basic repair for the testwheel package"""
-
-#     test_dir = pathlib.Path(__file__).parent
-
-#     with tempfile.TemporaryDirectory() as tmp:
-#         tmp = pathlib.Path(tmp)
-#         check_call(
-#             [
-#                 sys.executable,
-#                 "-m",
-#                 "repairwheel",
-#                 "--lib-dir",
-#                 test_dir / "testwheel" / "lib",
-#                 test_dir / "testwheel" / "testwheel-0.0.1-cp36-abi3-win_amd64.whl",
-#                 "--output-dir",
-#                 str(tmp),
-#             ]
-#         )
-#         with zipfile.ZipFile(tmp / "testwheel-0.0.1-cp36-abi3-win_amd64.whl") as wheel:
-#             for path in zipfile.Path(wheel, "testwheel.libs/").iterdir():
-#                 if path.name.startswith("testdep-"):
-#                     assert is_mangled(path.name), f"{path.name} is mangled"
-#                     break
-#             else:
-#                 assert False, "did not find testdep dll"
+    with tempfile.TemporaryDirectory() as tmpdir:
+        env = venv.EnvBuilder(with_pip=True)
+        env.create(tmpdir)
+        context = env.ensure_directories(tmpdir)
+        _call_new_python(context, "-m", "pip", "install", str(patched_wheel))
+        answer = _call_new_python(context, "-c", "from repairwheel_test import testwheel; print(testwheel.get_answer())")
+        assert answer.strip() == b'42'
