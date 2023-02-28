@@ -22,7 +22,9 @@ def _patch_tools():
         setattr(delocate_tools, fn_name, patched_fn)
 
     import delocate.delocating
+
     importlib.reload(delocate.delocating)
+
 
 def repair(wheel: Path, output_path: Path, lib_path: List[Path]) -> Path:
     _patch_tools()
