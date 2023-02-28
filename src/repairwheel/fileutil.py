@@ -1,6 +1,4 @@
 import os
-from threading import RLock
-from types import GenericAlias
 from typing import BinaryIO
 from typing import IO
 
