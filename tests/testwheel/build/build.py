@@ -37,7 +37,6 @@ class BuildInfo:
     python_url: str
 
 
-
 LINUX_BUILD = BuildInfo(
     target="x86_64-linux",
     tag="cp36-abi3-linux_x86_64",
@@ -52,11 +51,19 @@ LINUX_BUILD = BuildInfo(
 MACOS_BUILD = BuildInfo(
     target="aarch64-macos",
     tag="cp36-abi3-macosx_11_0_arm64",
-    dep_cflags=["-shared", "-install_name", "libtestdep.dylib"],
+    dep_cflags=["-shared", "-install_name", "libtestdep.dylib", "-headerpad_max_install_names"],
     dep_name="libtestdep.dylib",
-    ext_cflags=["-shared", "-Wl,-undefined,dynamic_lookup", "-I{pydir}/python/include/python3.10", "-I{testdep}", "-L{lib}", "-ltestdep"],
+    ext_cflags=[
+        "-shared",
+        "-Wl,-undefined,dynamic_lookup",
+        "-headerpad_max_install_names",
+        "-I{pydir}/python/include/python3.10",
+        "-I{testdep}",
+        "-L{lib}",
+        "-ltestdep",
+    ],
     ext_name=f"{WHEEL_NAME}.abi3.so",
-    python_url="https://github.com/indygreg/python-build-standalone/releases/download/20230116/cpython-3.10.9+20230116-aarch64-apple-darwin-install_only.tar.gz"
+    python_url="https://github.com/indygreg/python-build-standalone/releases/download/20230116/cpython-3.10.9+20230116-aarch64-apple-darwin-install_only.tar.gz",
 )
 
 
@@ -65,7 +72,16 @@ WINDOWS_BUILD = BuildInfo(
     tag="cp36-abi3-win_amd64",
     dep_cflags=["-DMS_WIN64", "-shared"],
     dep_name="testdep.dll",
-    ext_cflags=["-DMS_WIN64", "-shared", "-I{pydir}/python/include", "-I{testdep}", "-L{pydir}/python/libs", "-L{lib}", "-lpython3", "-ltestdep"],
+    ext_cflags=[
+        "-DMS_WIN64",
+        "-shared",
+        "-I{pydir}/python/include",
+        "-I{testdep}",
+        "-L{pydir}/python/libs",
+        "-L{lib}",
+        "-lpython3",
+        "-ltestdep",
+    ],
     ext_name=f"{WHEEL_NAME}.pyd",
     python_url="https://github.com/indygreg/python-build-standalone/releases/download/20230116/cpython-3.10.9+20230116-x86_64-pc-windows-msvc-shared-install_only.tar.gz",
 )
@@ -73,8 +89,8 @@ WINDOWS_BUILD = BuildInfo(
 
 def fetch_python(build_info: BuildInfo, build_dir: Path) -> Path:
     urllib.request.urlretrieve(build_info.python_url, str(build_dir / "python.tgz"))
-    python_dir = build_dir / 'python'
-    with tarfile.open(build_dir / 'python.tgz') as tf:
+    python_dir = build_dir / "python"
+    with tarfile.open(build_dir / "python.tgz") as tf:
         tf.extractall(python_dir)
 
     return python_dir
@@ -94,7 +110,7 @@ def build_testdep(build_info: BuildInfo, build_dir: Path) -> Path:
 def build_ext(build_info: BuildInfo, build_dir: Path, python_dir: Path, lib_dir: Path) -> Path:
     print(f"Building {build_info.ext_name}")
     fmt = {
-        "pydir": str(python_dir), 
+        "pydir": str(python_dir),
         "lib": str(lib_dir),
         "testdep": str(SCRIPT_DIR / "testdep"),
     }
@@ -154,7 +170,7 @@ def build_wheel(build_info: BuildInfo, ext_file: Path, out_dir: Path) -> None:
         for fname in sorted(files):
             data = files[fname]
             zip.writestr(fname, data)
-    
+
 
 def build(build_info: BuildInfo, build_dir: Path, out_dir: Path):
     build_dir = build_dir / f"_build_{build_info.target}"
