@@ -156,8 +156,11 @@ def get_install_names(filename: str) -> Tuple[str, ...]:
 
         return tuple(results)
 
-    macho = MachO(filename)
-    return _all_arches_same_value(macho, _val)
+    try:
+        macho = MachO(filename)
+        return _all_arches_same_value(macho, _val)
+    except ValueError:
+        return ()
 
 
 def get_install_id(filename: str) -> Optional[str]:
@@ -187,8 +190,11 @@ def get_install_id(filename: str) -> Optional[str]:
             _, cmd, _ = entry
             return lc_str_value(cmd.name, entry).decode("utf-8")
 
-    macho = MachO(filename)
-    return _all_arches_same_value(macho, _val)
+    try:
+        macho = MachO(filename)
+        return _all_arches_same_value(macho, _val)
+    except ValueError:
+        return None
 
 
 def set_install_name(filename: str, oldname: str, newname: str, ad_hoc_sign: bool = True) -> None:
@@ -295,8 +301,11 @@ def get_rpaths(filename: str) -> Tuple[str, ...]:
 
         return tuple(results)
 
-    macho = MachO(filename)
-    return _all_arches_same_value(macho, _val)
+    try:
+        macho = MachO(filename)
+        return _all_arches_same_value(macho, _val)
+    except ValueError:
+        return ()
 
 
 def get_archs(filename: str) -> FrozenSet[str]:

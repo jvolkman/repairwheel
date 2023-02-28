@@ -21,9 +21,11 @@ def _patch_tools():
         patched_fn = getattr(patched_tools, fn_name)
         setattr(delocate_tools, fn_name, patched_fn)
 
+    # TODO: This is pretty brittle; there must be a better way.
     import delocate.delocating
-
+    import delocate.libsana
     importlib.reload(delocate.delocating)
+    importlib.reload(delocate.libsana)
 
 
 def repair(wheel: Path, output_path: Path, lib_path: List[Path]) -> Path:

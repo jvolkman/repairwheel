@@ -1,13 +1,14 @@
 import os
+import platform
 import subprocess
-import sys
 import tempfile
 import venv
 import zipfile
 from pathlib import Path
 
 import pytest
-
+from packaging.tags import compatible_tags
+from packaging.utils import parse_wheel_filename
 
 def _call_new_python(context, *py_args, **kwargs) -> bytes:
     # Copied from stdlib venv module, but this version returns the output.
@@ -31,17 +32,12 @@ def test_wheel_contains_testdep(patched_wheel: Path) -> None:
 
 
 def test_wheel_installs_and_runs(patched_wheel: Path) -> None:
-    if sys.platform == "linux":
-        if "linux" not in patched_wheel.name:
-            pytest.skip(f"Wheel not installable on linux: {patched_wheel.name}")
-    elif sys.platform == "darwin":
-        if "macos" not in patched_wheel.name:
-            pytest.skip(f"Wheel not installable on macos: {patched_wheel.name}")
-    elif sys.platform == "win32":
-        if "win" not in patched_wheel.name:
-            pytest.skip(f"Wheel not installable on windows: {patched_wheel.name}")
+    _, _, _, wheel_tags = parse_wheel_filename(patched_wheel.name)
+    for sys_tag in compatible_tags():
+        if sys_tag in wheel_tags:
+            break
     else:
-        assert False, f"test cannot run on {sys.platform}"
+        pytest.skip(f"Wheel not installable on {platform.platform()}: {patched_wheel.name}")
 
     with tempfile.TemporaryDirectory() as tmpdir:
         env = venv.EnvBuilder(with_pip=True)

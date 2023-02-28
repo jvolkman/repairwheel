@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 import os
 import subprocess
 import sys
@@ -5,6 +6,13 @@ import tempfile
 from pathlib import Path
 
 import pytest
+
+
+@dataclass
+class TestWheel:
+    tag: str
+    wheel: Path
+    lib_dir: Path
 
 
 def patch_wheel(wheel: Path, lib_dir: Path, out_dir: Path) -> None:
@@ -23,11 +31,10 @@ def patch_wheel(wheel: Path, lib_dir: Path, out_dir: Path) -> None:
     )
 
 
-def get_patched_wheel(platform: str, wheel: Path, testwheel_root: Path, patched_wheel_area: Path) -> Path:
-    out_dir = patched_wheel_area / platform
+def get_patched_wheel(testwheel: TestWheel, patched_wheel_area: Path) -> Path:
+    out_dir = patched_wheel_area / testwheel.tag
     out_dir.mkdir(parents=True, exist_ok=True)
-    lib_dir = testwheel_root / "lib"
-    patch_wheel(wheel, lib_dir, out_dir)
+    patch_wheel(testwheel.wheel, testwheel.lib_dir, out_dir)
     files = list(out_dir.glob("*.whl"))
     assert len(files) == 1, f"Found {len(files)} wheels in {out_dir}"
     return files[0]
@@ -45,35 +52,65 @@ def patched_wheel_area() -> Path:
 
 
 @pytest.fixture(scope="session")
-def orig_linux_wheel(testwheel_root: Path) -> Path:
-    return testwheel_root / "testwheel-0.0.1-cp36-abi3-linux_x86_64.whl"
+def orig_linux_x86_64_wheel(testwheel_root: Path) -> TestWheel:
+    tag = "cp36-abi3-linux_x86_64"
+    return TestWheel(
+        tag,
+        testwheel_root / tag / f"testwheel-0.0.1-{tag}.whl",
+        testwheel_root / tag / "lib",
+    )
 
 
 @pytest.fixture(scope="session")
-def patched_linux_wheel(orig_linux_wheel: Path, testwheel_root: Path, patched_wheel_area: Path) -> Path:
-    return get_patched_wheel("linux", orig_linux_wheel, testwheel_root, patched_wheel_area)
+def patched_linux_x86_64_wheel(orig_linux_x86_64_wheel: TestWheel, patched_wheel_area: Path) -> Path:
+    return get_patched_wheel(orig_linux_x86_64_wheel, patched_wheel_area)
 
 
 @pytest.fixture(scope="session")
-def orig_macos_wheel(testwheel_root: Path) -> Path:
-    return testwheel_root / "testwheel-0.0.1-cp36-abi3-macosx_11_0_arm64.whl"
+def orig_macos_x86_64_wheel(testwheel_root: Path) -> TestWheel:
+    tag = "cp36-abi3-macosx_11_0_x86_64"
+    return TestWheel(
+        tag,
+        testwheel_root / tag / f"testwheel-0.0.1-{tag}.whl",
+        testwheel_root / tag / "lib",
+    )
 
 
 @pytest.fixture(scope="session")
-def patched_macos_wheel(orig_macos_wheel: Path, testwheel_root: Path, patched_wheel_area: Path) -> Path:
-    return get_patched_wheel("macos", orig_macos_wheel, testwheel_root, patched_wheel_area)
+def patched_macos_x86_64_wheel(orig_macos_x86_64_wheel: Path, patched_wheel_area: Path) -> Path:
+    return get_patched_wheel(orig_macos_x86_64_wheel, patched_wheel_area)
 
 
 @pytest.fixture(scope="session")
-def orig_windows_wheel(testwheel_root: Path) -> Path:
-    return testwheel_root / "testwheel-0.0.1-cp36-abi3-win_amd64.whl"
+def orig_macos_arm64_wheel(testwheel_root: Path) -> TestWheel:
+    tag = "cp36-abi3-macosx_11_0_arm64"
+    return TestWheel(
+        tag,
+        testwheel_root / tag / f"testwheel-0.0.1-{tag}.whl",
+        testwheel_root / tag / "lib",
+    )
 
 
 @pytest.fixture(scope="session")
-def patched_windows_wheel(orig_windows_wheel: Path, testwheel_root: Path, patched_wheel_area: Path) -> Path:
-    return get_patched_wheel("windows", orig_windows_wheel, testwheel_root, patched_wheel_area)
+def patched_macos_arm64_wheel(orig_macos_arm64_wheel: Path, patched_wheel_area: Path) -> Path:
+    return get_patched_wheel(orig_macos_arm64_wheel, patched_wheel_area)
 
 
-@pytest.fixture(params=["patched_linux_wheel", "patched_macos_wheel", "patched_windows_wheel"])
+@pytest.fixture(scope="session")
+def orig_windows_x86_64_wheel(testwheel_root: Path) -> TestWheel:
+    tag = "cp36-abi3-win_amd64"
+    return TestWheel(
+        tag,
+        testwheel_root / tag / f"testwheel-0.0.1-{tag}.whl",
+        testwheel_root / tag / "lib",
+    )
+
+
+@pytest.fixture(scope="session")
+def patched_windows_x86_64_wheel(orig_windows_x86_64_wheel: TestWheel, patched_wheel_area: Path) -> Path:
+    return get_patched_wheel(orig_windows_x86_64_wheel, patched_wheel_area)
+
+
+@pytest.fixture(params=["patched_linux_x86_64_wheel", "patched_macos_x86_64_wheel", "patched_macos_arm64_wheel", "patched_windows_x86_64_wheel"])
 def patched_wheel(request) -> Path:
     return request.getfixturevalue(request.param)

@@ -37,7 +37,7 @@ class BuildInfo:
     python_url: str
 
 
-LINUX_BUILD = BuildInfo(
+LINUX_X86_64_BUILD = BuildInfo(
     target="x86_64-linux",
     tag="cp36-abi3-linux_x86_64",
     dep_cflags=["-shared", "-Wl,-soname,libtestdep.so"],
@@ -48,7 +48,7 @@ LINUX_BUILD = BuildInfo(
 )
 
 
-MACOS_BUILD = BuildInfo(
+MACOS_ARM64_BUILD = BuildInfo(
     target="aarch64-macos",
     tag="cp36-abi3-macosx_11_0_arm64",
     dep_cflags=["-shared", "-install_name", "libtestdep.dylib", "-Wl,-headerpad_max_install_names"],
@@ -67,7 +67,26 @@ MACOS_BUILD = BuildInfo(
 )
 
 
-WINDOWS_BUILD = BuildInfo(
+MACOS_X86_64_BUILD = BuildInfo(
+    target="x86_64-macos",
+    tag="cp36-abi3-macosx_11_0_x86_64",
+    dep_cflags=["-shared", "-install_name", "libtestdep.dylib", "-Wl,-headerpad_max_install_names"],
+    dep_name="libtestdep.dylib",
+    ext_cflags=[
+        "-shared",
+        "-Wl,-undefined,dynamic_lookup",
+        "-Wl,-headerpad_max_install_names",
+        "-I{pydir}/python/include/python3.10",
+        "-I{testdep}",
+        "-L{lib}",
+        "-ltestdep",
+    ],
+    ext_name=f"{WHEEL_NAME}.abi3.so",
+    python_url="https://github.com/indygreg/python-build-standalone/releases/download/20230116/cpython-3.10.9+20230116-x86_64-apple-darwin-install_only.tar.gz",
+)
+
+
+WINDOWS_X86_64_BUILD = BuildInfo(
     target="x86_64-windows",
     tag="cp36-abi3-win_amd64",
     dep_cflags=["-DMS_WIN64", "-shared"],
@@ -179,6 +198,7 @@ def build(build_info: BuildInfo, build_dir: Path, out_dir: Path):
     build_dir.mkdir(parents=True, exist_ok=True)
 
     testdep_file = build_testdep(build_info, build_dir)
+    out_dir = out_dir / build_info.tag
     out_lib_dir = out_dir / "lib"
     out_lib_dir.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(testdep_file, out_lib_dir / testdep_file.name)
@@ -190,9 +210,20 @@ def build(build_info: BuildInfo, build_dir: Path, out_dir: Path):
 
 
 if __name__ == "__main__":
+    build_choices = {
+        "linux_x86_64": [LINUX_X86_64_BUILD],
+        "macos_x86_64": [MACOS_X86_64_BUILD],
+        "macos_arm64": [MACOS_ARM64_BUILD],
+        "windows_x86_64": [WINDOWS_X86_64_BUILD],
+    }
+    all = []
+    for v in build_choices.values():
+        all.extend(v)
+    build_choices["all"] = all
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--target", choices=["linux", "macos", "windows", "all"], required=True)
+    parser.add_argument("--target", choices=list(build_choices), required=True)
     parser.add_argument("--no-cleanup", action="store_true")
     args = parser.parse_args()
 
@@ -201,14 +232,8 @@ if __name__ == "__main__":
 
     print(f"Build temp: {build_dir}")
 
+    build_infos = build_choices[args.target]
     try:
-        build_infos = {
-            "linux": [LINUX_BUILD],
-            "macos": [MACOS_BUILD],
-            "windows": [WINDOWS_BUILD],
-            "all": [LINUX_BUILD, MACOS_BUILD, WINDOWS_BUILD],
-        }[args.target]
-
         for info in build_infos:
             build(info, build_dir, out_dir)
 
