@@ -27,6 +27,7 @@ def test_wheel_installs_and_runs(patched_wheel: Path) -> None:
     else:
         assert False, f"test cannot run on {sys.platform}"
 
+
 # def test_patched_testwheel_runs():
 #     """Basic repair for the testwheel package"""
 
@@ -53,7 +54,3 @@ def test_wheel_installs_and_runs(patched_wheel: Path) -> None:
 #                     break
 #             else:
 #                 assert False, "did not find testdep dll"
-
-
-
-
