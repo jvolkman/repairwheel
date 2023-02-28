@@ -10,8 +10,7 @@ import pytest
 
 
 def _call_new_python(context, *py_args, **kwargs) -> bytes:
-    """Executes the newly created Python using safe-ish options"""
-    # Copied from stdlib venv module.
+    # Copied from stdlib venv module, but this version returns the output.
     args = [context.env_exec_cmd, *py_args]
     kwargs['env'] = env = os.environ.copy()
     env['VIRTUAL_ENV'] = context.env_dir
