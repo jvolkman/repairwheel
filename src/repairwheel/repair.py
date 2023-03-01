@@ -7,9 +7,9 @@ from typing import Set
 
 from packaging.utils import parse_wheel_filename
 
-from .linux import repair as linux_repair
-from .macos import repair as macos_repair
-from .windows import repair as windows_repair
+from .linux.repair import repair as linux_repair
+from .macos.repair import repair as macos_repair
+from .windows.repair import repair as windows_repair
 
 
 def fatal(message: str) -> NoReturn:
