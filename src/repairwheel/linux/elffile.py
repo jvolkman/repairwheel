@@ -633,7 +633,7 @@ class ElfFile:
 
         # Sanity check to make sure the .dynstr section agrees with DT_STRTAB and DT_STRSZ.
         dynstr_shdr = self.get_shdr(b".dynstr")
-        if dynstr_pos != dynstr_shdr.sh_offset or dynstr_size != dynstr_shdr.sh_size:
+        if dynstr_pos != dynstr_shdr.sh_addr or dynstr_size != dynstr_shdr.sh_size:
             raise ValueError("DT_STRTAB and DT_STRSZ do not agree with .dynstr")
 
         with self._peek() as fh:
@@ -684,6 +684,20 @@ class ElfFile:
                     verneed_num -= 1
 
         return result
+
+    @cached_property
+    def rpath(self) -> Optional[str]:
+        for d in self.dyn:
+            if d.d_tag == DT_RPATH:
+                return get_strtab_entry(self.dynstr, d.d_ptr_or_val)
+        return None
+
+    @cached_property
+    def runpath(self) -> Optional[bytes]:
+        for d in self.dyn:
+            if d.d_tag == DT_RUNPATH:
+                return get_strtab_entry(self.dynstr, d.d_ptr_or_val)
+        return None
 
     def guess_page_size(self) -> int:
         """Guess the page size from existing PT_LOAD headers. Else default to 0x1000."""
