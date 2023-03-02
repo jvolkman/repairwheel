@@ -24,6 +24,7 @@ def _patch_tools():
     # TODO: This is pretty brittle; there must be a better way.
     import delocate.delocating
     import delocate.libsana
+
     importlib.reload(delocate.delocating)
     importlib.reload(delocate.libsana)
 
