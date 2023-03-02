@@ -2,12 +2,15 @@ from importlib import reload
 from pathlib import Path
 from typing import List
 
+
 def init_policies_for_machine(machine: str) -> None:
     import platform
+
     orig_machine_fn = platform.machine
     try:
         platform.machine = lambda: machine
         import auditwheel.policy
+
         reload(auditwheel.policy)
     finally:
         platform.machine = orig_machine_fn

@@ -111,6 +111,13 @@ def patched_windows_x86_64_wheel(orig_windows_x86_64_wheel: TestWheel, patched_w
     return get_patched_wheel(orig_windows_x86_64_wheel, patched_wheel_area)
 
 
-@pytest.fixture(params=["patched_linux_x86_64_wheel", "patched_macos_x86_64_wheel", "patched_macos_arm64_wheel", "patched_windows_x86_64_wheel"])
+@pytest.fixture(
+    params=[
+        "patched_linux_x86_64_wheel",
+        "patched_macos_x86_64_wheel",
+        "patched_macos_arm64_wheel",
+        "patched_windows_x86_64_wheel",
+    ]
+)
 def patched_wheel(request) -> Path:
     return request.getfixturevalue(request.param)

@@ -1,6 +1,7 @@
 from typing import Tuple
 from .elffile import ElfFile
 
+
 class RepairWheelElfPatcher:
     def replace_needed(self, file_name: str, *old_new_pairs: Tuple[str, str]) -> None:
         replacements = {k.encode("utf-8"): v.encode("utf-8") for k, v in old_new_pairs}
