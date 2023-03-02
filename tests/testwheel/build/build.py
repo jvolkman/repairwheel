@@ -37,8 +37,7 @@ class BuildInfo:
     python_url: str
 
 
-
-LINUX_BUILD = BuildInfo(
+LINUX_X86_64_BUILD = BuildInfo(
     target="x86_64-linux",
     tag="cp36-abi3-linux_x86_64",
     dep_cflags=["-shared", "-Wl,-soname,libtestdep.so"],
@@ -49,23 +48,59 @@ LINUX_BUILD = BuildInfo(
 )
 
 
-MACOS_BUILD = BuildInfo(
+MACOS_ARM64_BUILD = BuildInfo(
     target="aarch64-macos",
     tag="cp36-abi3-macosx_11_0_arm64",
-    dep_cflags=["-shared", "-install_name", "libtestdep.dylib"],
+    dep_cflags=["-shared", "-install_name", "libtestdep.dylib", "-Wl,-headerpad_max_install_names"],
     dep_name="libtestdep.dylib",
-    ext_cflags=["-shared", "-Wl,-undefined,dynamic_lookup", "-I{pydir}/python/include/python3.10", "-I{testdep}", "-L{lib}", "-ltestdep"],
+    ext_cflags=[
+        "-shared",
+        "-Wl,-undefined,dynamic_lookup",
+        "-Wl,-headerpad_max_install_names",
+        "-I{pydir}/python/include/python3.10",
+        "-I{testdep}",
+        "-L{lib}",
+        "-ltestdep",
+    ],
     ext_name=f"{WHEEL_NAME}.abi3.so",
-    python_url="https://github.com/indygreg/python-build-standalone/releases/download/20230116/cpython-3.10.9+20230116-aarch64-apple-darwin-install_only.tar.gz"
+    python_url="https://github.com/indygreg/python-build-standalone/releases/download/20230116/cpython-3.10.9+20230116-aarch64-apple-darwin-install_only.tar.gz",
 )
 
 
-WINDOWS_BUILD = BuildInfo(
+MACOS_X86_64_BUILD = BuildInfo(
+    target="x86_64-macos",
+    tag="cp36-abi3-macosx_11_0_x86_64",
+    dep_cflags=["-shared", "-install_name", "libtestdep.dylib", "-Wl,-headerpad_max_install_names"],
+    dep_name="libtestdep.dylib",
+    ext_cflags=[
+        "-shared",
+        "-Wl,-undefined,dynamic_lookup",
+        "-Wl,-headerpad_max_install_names",
+        "-I{pydir}/python/include/python3.10",
+        "-I{testdep}",
+        "-L{lib}",
+        "-ltestdep",
+    ],
+    ext_name=f"{WHEEL_NAME}.abi3.so",
+    python_url="https://github.com/indygreg/python-build-standalone/releases/download/20230116/cpython-3.10.9+20230116-x86_64-apple-darwin-install_only.tar.gz",
+)
+
+
+WINDOWS_X86_64_BUILD = BuildInfo(
     target="x86_64-windows",
     tag="cp36-abi3-win_amd64",
     dep_cflags=["-DMS_WIN64", "-shared"],
     dep_name="testdep.dll",
-    ext_cflags=["-DMS_WIN64", "-shared", "-I{pydir}/python/include", "-I{testdep}", "-L{pydir}/python/libs", "-L{lib}", "-lpython3", "-ltestdep"],
+    ext_cflags=[
+        "-DMS_WIN64",
+        "-shared",
+        "-I{pydir}/python/include",
+        "-I{testdep}",
+        "-L{pydir}/python/libs",
+        "-L{lib}",
+        "-lpython3",
+        "-ltestdep",
+    ],
     ext_name=f"{WHEEL_NAME}.pyd",
     python_url="https://github.com/indygreg/python-build-standalone/releases/download/20230116/cpython-3.10.9+20230116-x86_64-pc-windows-msvc-shared-install_only.tar.gz",
 )
@@ -73,8 +108,8 @@ WINDOWS_BUILD = BuildInfo(
 
 def fetch_python(build_info: BuildInfo, build_dir: Path) -> Path:
     urllib.request.urlretrieve(build_info.python_url, str(build_dir / "python.tgz"))
-    python_dir = build_dir / 'python'
-    with tarfile.open(build_dir / 'python.tgz') as tf:
+    python_dir = build_dir / "python"
+    with tarfile.open(build_dir / "python.tgz") as tf:
         tf.extractall(python_dir)
 
     return python_dir
@@ -94,7 +129,7 @@ def build_testdep(build_info: BuildInfo, build_dir: Path) -> Path:
 def build_ext(build_info: BuildInfo, build_dir: Path, python_dir: Path, lib_dir: Path) -> Path:
     print(f"Building {build_info.ext_name}")
     fmt = {
-        "pydir": str(python_dir), 
+        "pydir": str(python_dir),
         "lib": str(lib_dir),
         "testdep": str(SCRIPT_DIR / "testdep"),
     }
@@ -154,7 +189,7 @@ def build_wheel(build_info: BuildInfo, ext_file: Path, out_dir: Path) -> None:
         for fname in sorted(files):
             data = files[fname]
             zip.writestr(fname, data)
-    
+
 
 def build(build_info: BuildInfo, build_dir: Path, out_dir: Path):
     build_dir = build_dir / f"_build_{build_info.target}"
@@ -163,6 +198,7 @@ def build(build_info: BuildInfo, build_dir: Path, out_dir: Path):
     build_dir.mkdir(parents=True, exist_ok=True)
 
     testdep_file = build_testdep(build_info, build_dir)
+    out_dir = out_dir / build_info.tag
     out_lib_dir = out_dir / "lib"
     out_lib_dir.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(testdep_file, out_lib_dir / testdep_file.name)
@@ -174,9 +210,20 @@ def build(build_info: BuildInfo, build_dir: Path, out_dir: Path):
 
 
 if __name__ == "__main__":
+    build_choices = {
+        "linux_x86_64": [LINUX_X86_64_BUILD],
+        "macos_x86_64": [MACOS_X86_64_BUILD],
+        "macos_arm64": [MACOS_ARM64_BUILD],
+        "windows_x86_64": [WINDOWS_X86_64_BUILD],
+    }
+    all = []
+    for v in build_choices.values():
+        all.extend(v)
+    build_choices["all"] = all
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--target", choices=["linux", "macos", "windows", "all"], required=True)
+    parser.add_argument("--target", choices=list(build_choices), required=True)
     parser.add_argument("--no-cleanup", action="store_true")
     args = parser.parse_args()
 
@@ -185,14 +232,8 @@ if __name__ == "__main__":
 
     print(f"Build temp: {build_dir}")
 
+    build_infos = build_choices[args.target]
     try:
-        build_infos = {
-            "linux": [LINUX_BUILD],
-            "macos": [MACOS_BUILD],
-            "windows": [WINDOWS_BUILD],
-            "all": [LINUX_BUILD, MACOS_BUILD, WINDOWS_BUILD],
-        }[args.target]
-
         for info in build_infos:
             build(info, build_dir, out_dir)
 

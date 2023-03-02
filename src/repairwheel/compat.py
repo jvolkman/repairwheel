@@ -1,5 +1,4 @@
 from threading import RLock
-from types import GenericAlias
 
 ################################################################################
 ### cached_property() - computed once per instance, cached as attribute
@@ -49,5 +48,3 @@ class cached_property:
                         )
                         raise TypeError(msg) from None
         return val
-
-    __class_getitem__ = classmethod(GenericAlias)

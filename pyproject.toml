@@ -47,7 +47,7 @@ skip = []  # "build" is included in the default skip list
 
 [tool.hatch.envs.test]
 dependencies = [
-  "pytest"
+  "pytest",
 ]
 
 [tool.hatch.envs.test.scripts]

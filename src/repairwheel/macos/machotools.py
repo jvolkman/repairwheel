@@ -16,6 +16,7 @@ from macholib.mach_o import LC_REEXPORT_DYLIB
 from macholib.mach_o import LC_RPATH
 from macholib.mach_o import get_cpu_subtype
 
+from . import machosign
 
 LOG = logging.getLogger(__name__)
 T = TypeVar("T")
@@ -155,8 +156,11 @@ def get_install_names(filename: str) -> Tuple[str, ...]:
 
         return tuple(results)
 
-    macho = MachO(filename)
-    return _all_arches_same_value(macho, _val)
+    try:
+        macho = MachO(filename)
+        return _all_arches_same_value(macho, _val)
+    except ValueError:
+        return ()
 
 
 def get_install_id(filename: str) -> Optional[str]:
@@ -186,8 +190,11 @@ def get_install_id(filename: str) -> Optional[str]:
             _, cmd, _ = entry
             return lc_str_value(cmd.name, entry).decode("utf-8")
 
-    macho = MachO(filename)
-    return _all_arches_same_value(macho, _val)
+    try:
+        macho = MachO(filename)
+        return _all_arches_same_value(macho, _val)
+    except ValueError:
+        return None
 
 
 def set_install_name(filename: str, oldname: str, newname: str, ad_hoc_sign: bool = True) -> None:
@@ -219,10 +226,11 @@ def set_install_name(filename: str, oldname: str, newname: str, ad_hoc_sign: boo
                 changed = True
 
     if changed:
-        with open(filename, "wb") as f:
+        with open(filename, "r+b") as f:
             macho.write(f)
 
-    # TODO: resign binary
+        if ad_hoc_sign:
+            replace_signature(filename, "-")
 
 
 def set_install_id(filename: str, install_id: str, ad_hoc_sign: bool = True):
@@ -251,10 +259,11 @@ def set_install_id(filename: str, install_id: str, ad_hoc_sign: bool = True):
         changed = True
 
     if changed:
-        with open(filename, "wb") as f:
+        with open(filename, "r+b") as f:
             macho.write(f)
 
-    # TODO: resign binary
+        if ad_hoc_sign:
+            replace_signature(filename, "-")
 
 
 def get_rpaths(filename: str) -> Tuple[str, ...]:
@@ -292,8 +301,11 @@ def get_rpaths(filename: str) -> Tuple[str, ...]:
 
         return tuple(results)
 
-    macho = MachO(filename)
-    return _all_arches_same_value(macho, _val)
+    try:
+        macho = MachO(filename)
+        return _all_arches_same_value(macho, _val)
+    except ValueError:
+        return ()
 
 
 def get_archs(filename: str) -> FrozenSet[str]:
@@ -337,7 +349,7 @@ def replace_signature(filename: str, identity: str) -> None:
     """
     if identity != "-":
         raise ValueError("This implementation only supports ad-hoc signing ('-')")
-    raise NotImplementedError
+    machosign.ad_hoc_sign(filename)
 
 
 def validate_signature(filename: str) -> None:
@@ -353,4 +365,6 @@ def validate_signature(filename: str) -> None:
     filename : str
         Filepath to a binary file
     """
-    raise NotImplementedError
+    # TODO: this function can probably be removed. The only non-test function that calls
+    # it also calls `replace_signature` prior (via `set_install_id`).
+    replace_signature(filename, "-")
