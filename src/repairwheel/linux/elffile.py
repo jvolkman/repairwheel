@@ -637,8 +637,8 @@ class ElfFile:
             raise ValueError("DT_STRTAB and DT_STRSZ do not agree with .dynstr")
 
         with self._peek() as fh:
-            fh.seek(dynstr_pos)
-            dynstr = fh.read(dynstr_size)
+            fh.seek(dynstr_shdr.sh_offset)
+            dynstr = fh.read(dynstr_shdr.sh_size)
 
         return dynstr
 
