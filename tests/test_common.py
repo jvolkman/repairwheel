@@ -1,6 +1,7 @@
 import os
 import platform
 import subprocess
+import sys
 import tempfile
 import venv
 import zipfile
@@ -13,13 +14,19 @@ from packaging.utils import parse_wheel_filename
 
 def _call_new_python(context, *py_args, **kwargs) -> bytes:
     # Copied from stdlib venv module, but this version returns the output.
-    args = [context.env_exec_cmd, *py_args]
+    env_exec_cmd = context.env_exe
+    if sys.platform == 'win32':
+        real_env_exe = os.path.realpath(context.env_exe)
+        if os.path.normcase(real_env_exe) != os.path.normcase(context.env_exe):
+            context.env_exec_cmd = real_env_exe
+
+    args = [env_exec_cmd, *py_args]
     kwargs["env"] = env = os.environ.copy()
     env["VIRTUAL_ENV"] = context.env_dir
     env.pop("PYTHONHOME", None)
     env.pop("PYTHONPATH", None)
     kwargs["cwd"] = context.env_dir
-    kwargs["executable"] = context.env_exec_cmd
+    kwargs["executable"] = env_exec_cmd
     return subprocess.check_output(args, **kwargs)
 
 
