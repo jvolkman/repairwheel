@@ -50,7 +50,7 @@ LINUX_X86_64_BUILD = BuildInfo(
 
 MACOS_ARM64_BUILD = BuildInfo(
     target="aarch64-macos",
-    tag="cp36-abi3-macosx_11_0_arm64",
+    tag="cp36-abi3-macosx_10_11_arm64",
     dep_cflags=["-shared", "-install_name", "libtestdep.dylib", "-Wl,-headerpad_max_install_names"],
     dep_name="libtestdep.dylib",
     ext_cflags=[
@@ -69,7 +69,7 @@ MACOS_ARM64_BUILD = BuildInfo(
 
 MACOS_X86_64_BUILD = BuildInfo(
     target="x86_64-macos",
-    tag="cp36-abi3-macosx_11_0_x86_64",
+    tag="cp36-abi3-macosx_10_11_x86_64",
     dep_cflags=["-shared", "-install_name", "libtestdep.dylib", "-Wl,-headerpad_max_install_names"],
     dep_name="libtestdep.dylib",
     ext_cflags=[
