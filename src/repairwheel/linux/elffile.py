@@ -280,6 +280,46 @@ class Elf64_Dyn_LE(Structure):
     _fields_ = _Elf64_Dyn_fields
 
 
+_Elf32_Sym_fields = [
+    ("st_name", Elf32_Word),
+    ("st_value", Elf32_Addr),
+    ("st_size", Elf32_Word),
+    ("st_info", p_uint8),
+    ("st_other", p_uint8),
+    ("st_shndx", Elf32_Half),
+]
+
+
+class Elf32_Sym_BE(Structure):
+    _endian_ = ">"
+    _fields_ = _Elf32_Sym_fields
+
+
+class Elf32_Sym_LE(Structure):
+    _endian_ = "<"
+    _fields_ = _Elf32_Sym_fields
+
+
+_Elf64_Sym_fields = [
+    ("st_name", Elf64_Word),
+    ("st_info", p_uint8),
+    ("st_other", p_uint8),
+    ("st_shndx", Elf64_Half),
+    ("st_value", Elf64_Addr),
+    ("st_size", Elf64_Xword),
+]
+
+
+class Elf64_Sym_BE(Structure):
+    _endian_ = ">"
+    _fields_ = _Elf64_Sym_fields
+
+
+class Elf64_Sym_LE(Structure):
+    _endian_ = "<"
+    _fields_ = _Elf64_Sym_fields
+
+
 _Elf32_Verneed_fields = [
     ("vn_version", Elf32_Half),
     ("vn_cnt", Elf32_Half),
@@ -360,6 +400,7 @@ Elf_Ehdr = Union[Elf32_Ehdr_BE, Elf32_Ehdr_LE, Elf64_Ehdr_BE, Elf64_Ehdr_LE]
 Elf_Phdr = Union[Elf32_Phdr_BE, Elf32_Phdr_LE, Elf64_Phdr_BE, Elf64_Phdr_LE]
 Elf_Shdr = Union[Elf32_Shdr_BE, Elf32_Shdr_LE, Elf64_Shdr_BE, Elf64_Shdr_LE]
 Elf_Dyn = Union[Elf32_Dyn_BE, Elf32_Dyn_LE, Elf64_Dyn_BE, Elf64_Dyn_LE]
+Elf_Sym = Union[Elf32_Sym_BE, Elf32_Sym_LE, Elf64_Sym_BE, Elf64_Sym_LE]
 Elf_Verneed = Union[Elf32_Verneed_BE, Elf32_Verneed_LE, Elf64_Verneed_BE, Elf64_Verneed_LE]
 Elf_Vernaux = Union[Elf32_Vernaux_BE, Elf32_Vernaux_LE, Elf64_Vernaux_BE, Elf64_Vernaux_LE]
 
@@ -371,6 +412,7 @@ class ElfClass:
     Phdr: Elf_Phdr
     Shdr: Elf_Shdr
     Dyn: Elf_Dyn
+    Sym: Elf_Sym
     Verneed: Elf_Verneed
     Vernaux: Elf_Vernaux
 
@@ -381,6 +423,7 @@ ELF32_CLASS_BE = ElfClass(
     Phdr=Elf32_Phdr_BE,
     Shdr=Elf32_Shdr_BE,
     Dyn=Elf32_Dyn_BE,
+    Sym=Elf32_Sym_BE,
     Verneed=Elf32_Verneed_BE,
     Vernaux=Elf32_Vernaux_BE,
 )
@@ -391,6 +434,7 @@ ELF32_CLASS_LE = ElfClass(
     Phdr=Elf32_Phdr_LE,
     Shdr=Elf32_Shdr_LE,
     Dyn=Elf32_Dyn_LE,
+    Sym=Elf32_Sym_LE,
     Verneed=Elf32_Verneed_LE,
     Vernaux=Elf32_Vernaux_LE,
 )
@@ -401,6 +445,7 @@ ELF64_CLASS_BE = ElfClass(
     Phdr=Elf64_Phdr_BE,
     Shdr=Elf64_Shdr_BE,
     Dyn=Elf64_Dyn_BE,
+    Sym=Elf64_Sym_BE,
     Verneed=Elf64_Verneed_BE,
     Vernaux=Elf64_Vernaux_BE,
 )
@@ -411,6 +456,7 @@ ELF64_CLASS_LE = ElfClass(
     Phdr=Elf64_Phdr_LE,
     Shdr=Elf64_Shdr_LE,
     Dyn=Elf64_Dyn_LE,
+    Sym=Elf64_Sym_LE,
     Verneed=Elf64_Verneed_LE,
     Vernaux=Elf64_Vernaux_LE,
 )
@@ -1001,7 +1047,7 @@ class ElfFile:
         # Now we can write to our new buffer
         pos = PositionTracker(file_offset, vm_offset)
 
-        self._write_phdrs(buf, pos, SectionInfo(0, 0, 0), add_new_load)
+        # self._write_phdrs(buf, pos, SectionInfo(0, 0, 0), add_new_load)
 
         # .dynstr
         dynstr_pos = self._write_dynstr(buf, pos, new_dynstr)
@@ -1021,10 +1067,35 @@ class ElfFile:
         shdr_pos = self._write_shdrs(buf, pos, dynstr_pos, dynamic_pos, verneed_pos)
 
         # phdrs
-        pos.back_to_start()
+        # pos.back_to_start()
         phdr_pos = self._write_phdrs(buf, pos, dynamic_pos, add_new_load)
 
-        return phdr_pos, shdr_pos
+        return phdr_pos, shdr_pos, dynamic_pos
+
+    def _update_dynamic_symbol(self, dynamic_pos: PositionTracker) -> None:
+        symtab_shdr = self.find_shdr(b".symtab")
+        if not symtab_shdr:
+            return
+
+        # We get the string table index from the corresponding symtab section's sh_link
+        strtab_shdr = self.shdrs[symtab_shdr.sh_link]
+        with self._peek() as fh:
+            fh.seek(strtab_shdr.sh_offset)
+            st_strtab = fh.read(strtab_shdr.sh_size)
+            count = symtab_shdr.sh_size // sizeof(self._class.Sym)
+            for i in range(count):
+                pos = symtab_shdr.sh_offset + i * sizeof(self._class.Sym)
+                fh.seek(pos)
+                entry = self._class.Sym.from_fileobj(fh)
+                if entry.st_name != 0:
+                    name = get_strtab_entry(st_strtab, entry.st_name)
+                    if name == b"_DYNAMIC":
+                        entry = copy.deepcopy(entry)
+                        entry.st_value = dynamic_pos.vm_offset
+                        fh.seek(pos)
+                        entry.to_fileobj(fh)
+                        return
+
 
     def get_shdr(self, name: bytes) -> Elf_Shdr:
         s = self.find_shdr(name)
@@ -1061,13 +1132,13 @@ class ElfFile:
                 vm_max = max(vm_max, phdr.p_vaddr + phdr.p_memsz)
 
         # Our first section will be the PHDRs which are aligned to Elf_Off.
-        new_offset = round_to_multiple(file_end, self._class.alignment)
+        new_offset = round_to_multiple(file_end, page_size)
 
         # Then make our vm addr match
         new_vm_offset = congruent_vm_addr(new_offset, vm_max, page_size)
 
         buf = io.BytesIO()
-        phdr_pos, shdr_pos = self._write_new_trailer(
+        phdr_pos, shdr_pos, dynamic_pos = self._write_new_trailer(
             buf=buf,
             file_offset=new_offset,
             vm_offset=new_vm_offset,
@@ -1082,6 +1153,8 @@ class ElfFile:
         self._fh.seek(new_offset)
 
         self._fh.write(buf.getbuffer())
+
+        self._update_dynamic_symbol(dynamic_pos)
 
         hdr = copy.deepcopy(self.ehdr)
         hdr.e_phoff = phdr_pos.file_offset

@@ -12,10 +12,12 @@ static PyMethodDef TestwheelMethods[] = {
     {NULL, NULL, 0, NULL}
 };
 
+char doc[] = "A test wheel.";
+
 static struct PyModuleDef testwheelmodule = {
     PyModuleDef_HEAD_INIT,
     "testwheel",
-    NULL,
+    doc,
     -1,
     TestwheelMethods
 };

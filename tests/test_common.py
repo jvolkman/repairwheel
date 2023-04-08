@@ -47,3 +47,5 @@ def test_wheel_installs_and_runs(patched_wheel: Path) -> None:
         _call_new_python(context, "-m", "pip", "install", str(patched_wheel))
         answer = _call_new_python(context, "-c", "from repairwheel_test import testwheel; print(testwheel.get_answer())")
         assert answer.strip() == b"42"
+        doc = _call_new_python(context, "-c", "from repairwheel_test import testwheel; print(testwheel.__doc__)")
+        assert doc.strip() == b"A test wheel."
