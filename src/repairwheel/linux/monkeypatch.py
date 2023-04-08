@@ -1,6 +1,6 @@
 from importlib import reload
 from pathlib import Path
-from typing import List
+from typing import Dict, List
 
 
 def init_policies_for_machine(machine: str) -> None:
@@ -19,7 +19,7 @@ def init_policies_for_machine(machine: str) -> None:
 def patch_load_ld_paths(lib_paths: List[Path]) -> None:
     import auditwheel.lddtree
 
-    def load_ld_paths(root: str = "/", prefix: str = "") -> dict[str, list[str]]:
+    def load_ld_paths(root: str = "/", prefix: str = "") -> Dict[str, List[str]]:
         ld_library_path = ":".join(map(str, lib_paths))
         return {
             "env": auditwheel.lddtree.parse_ld_paths(ld_library_path, path=""),
