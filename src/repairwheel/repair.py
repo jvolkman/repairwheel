@@ -47,9 +47,9 @@ def main():
     parser = make_parser()
     args = parser.parse_args()
 
-    wheel: Path = args.wheel
-    out: Path = args.output_dir
-    lib_path: List[Path] = args.lib_dir or []
+    wheel: Path = args.wheel.resolve()
+    out: Path = args.output_dir.resolve()
+    lib_path: List[Path] = [lp.resolve() for lp in args.lib_dir]
 
     if not wheel.is_file():
         fatal(f"File does not exist: {wheel}")
