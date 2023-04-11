@@ -1,9 +1,6 @@
-import shutil
+from pathlib import Path
 from typing import Tuple
 from .elffile import ElfFile
-
-
-patch_num = 0
 
 
 class RepairWheelElfPatcher:
@@ -19,6 +16,11 @@ class RepairWheelElfPatcher:
             ef.rewrite(new_soname=new_so_name.encode("utf-8"))
 
     def set_rpath(self, file_name: str, rpath: str) -> None:
+        entries = rpath.split(":")
+        for i, e in enumerate(entries):
+            if e:
+                entries[i] = Path(e).as_posix()
+        rpath = ":".join(entries)
         with open(file_name, "r+b") as f:
             ef = ElfFile(f)
             ef.rewrite(new_rpath=rpath.encode("utf-8"))

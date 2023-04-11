@@ -1,5 +1,5 @@
-import os
-from os.path import basename, realpath, relpath
+from os.path import basename
+from pathlib import Path
 from typing import Dict, Iterator, List, Optional, Set, Tuple
 
 from elftools.common.exceptions import ELFError
@@ -130,12 +130,12 @@ def is_subdir(path: str, directory: str) -> bool:
     if path is None:
         return False
 
-    path = realpath(path)
-    directory = realpath(directory)
+    path = Path(path).resolve()
+    directory = Path(directory).resolve()
 
-    relative = relpath(path, directory)
-    if relative.startswith(os.pardir):
+    if directory not in path.parents:
         return False
+
     return True
 
 

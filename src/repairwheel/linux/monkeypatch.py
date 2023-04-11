@@ -20,9 +20,8 @@ def patch_load_ld_paths(lib_paths: List[Path]) -> None:
     import repairwheel._vendor.auditwheel.lddtree
 
     def load_ld_paths(root: str = "/", prefix: str = "") -> Dict[str, List[str]]:
-        ld_library_path = ":".join(map(str, lib_paths))
         return {
-            "env": repairwheel._vendor.auditwheel.lddtree.parse_ld_paths(ld_library_path, path=""),
+            "env": [str(lp) for lp in lib_paths],
             "conf": [],
             "interp": [],
         }
