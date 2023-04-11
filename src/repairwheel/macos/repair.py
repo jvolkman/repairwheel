@@ -26,6 +26,7 @@ def _patch_tools():
     # TODO: This is pretty brittle; there must be a better way.
     import repairwheel._vendor.delocate.delocating
     import repairwheel._vendor.delocate.libsana
+
     importlib.reload(repairwheel._vendor.delocate.delocating)
     importlib.reload(repairwheel._vendor.delocate.libsana)
 

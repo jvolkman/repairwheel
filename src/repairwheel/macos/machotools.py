@@ -372,9 +372,11 @@ def validate_signature(filename: str) -> None:
 
 def zip2dir(zip_fname: str, out_dir: str) -> None:
     from repairwheel._vendor.auditwheel.wheeltools import zip2dir
+
     return zip2dir(zip_fname, out_dir)
 
 
 def dir2zip(in_dir, zip_fname):
     from repairwheel._vendor.auditwheel.wheeltools import dir2zip
+
     return dir2zip(in_dir, zip_fname)

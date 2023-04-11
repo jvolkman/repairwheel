@@ -1096,7 +1096,6 @@ class ElfFile:
                         entry.to_fileobj(fh)
                         return
 
-
     def get_shdr(self, name: bytes) -> Elf_Shdr:
         s = self.find_shdr(name)
         if not s:
