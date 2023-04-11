@@ -368,3 +368,13 @@ def validate_signature(filename: str) -> None:
     # TODO: this function can probably be removed. The only non-test function that calls
     # it also calls `replace_signature` prior (via `set_install_id`).
     replace_signature(filename, "-")
+
+
+def zip2dir(zip_fname: str, out_dir: str) -> None:
+    from auditwheel.wheeltools import zip2dir
+    return zip2dir(zip_fname, out_dir)
+
+
+def dir2zip(in_dir, zip_fname):
+    from auditwheel.wheeltools import dir2zip
+    return dir2zip(in_dir, zip_fname)

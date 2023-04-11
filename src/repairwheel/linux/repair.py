@@ -1,6 +1,5 @@
 import argparse
 import logging
-import os
 from pathlib import Path
 from typing import List
 
@@ -29,7 +28,7 @@ def repair(wheel_file: Path, output_dir: Path, lib_path: List[Path], verbosity: 
     target_machine = get_machine_from_wheel(wheel_file)
     monkeypatch.apply_auditwheel_patches(target_machine, lib_path)
 
-    from auditwheel.wheel_abi import analyze_wheel_abi, NonPlatformWheel
+    from repairwheel._vendor.auditwheel.wheel_abi import analyze_wheel_abi, NonPlatformWheel
 
     try:
         winfo = analyze_wheel_abi(str(wheel_file))
@@ -43,7 +42,7 @@ def repair(wheel_file: Path, output_dir: Path, lib_path: List[Path], verbosity: 
     repair_parser = argparse.ArgumentParser()
     repair_sub_parsers = repair_parser.add_subparsers(metavar="command", dest="cmd")
 
-    from auditwheel import main_repair, main_show
+    from repairwheel._vendor.auditwheel import main_repair, main_show
 
     main_repair.Patchelf = patcher.RepairWheelElfPatcher
 

@@ -1,0 +1,170 @@
+diff --git a/src/repairwheel/_vendor/delocate/cmd/delocate_addplat.py b/src/repairwheel/_vendor/delocate/cmd/delocate_addplat.py
+index cfbe57b..cc8f4c5 100644
+--- a/src/repairwheel/_vendor/delocate/cmd/delocate_addplat.py
++++ b/src/repairwheel/_vendor/delocate/cmd/delocate_addplat.py
+@@ -23,8 +23,8 @@ from os.path import expanduser
+ from os.path import join as exists
+ from os.path import realpath
+ 
+-from delocate import __version__
+-from delocate.wheeltools import WheelToolsError, add_platforms
++from .. import __version__
++from ..wheeltools import WheelToolsError, add_platforms
+ 
+ 
+ def main():
+diff --git a/src/repairwheel/_vendor/delocate/cmd/delocate_fuse.py b/src/repairwheel/_vendor/delocate/cmd/delocate_fuse.py
+index 9fe6e31..3ab2ec5 100644
+--- a/src/repairwheel/_vendor/delocate/cmd/delocate_fuse.py
++++ b/src/repairwheel/_vendor/delocate/cmd/delocate_fuse.py
+@@ -11,8 +11,8 @@ from optparse import Option, OptionParser
+ from os.path import abspath, basename, expanduser
+ from os.path import join as pjoin
+ 
+-from delocate import __version__
+-from delocate.fuse import fuse_wheels
++from .. import __version__
++from ..fuse import fuse_wheels
+ 
+ 
+ def main():
+diff --git a/src/repairwheel/_vendor/delocate/cmd/delocate_listdeps.py b/src/repairwheel/_vendor/delocate/cmd/delocate_listdeps.py
+index 35ba44a..abde4e6 100644
+--- a/src/repairwheel/_vendor/delocate/cmd/delocate_listdeps.py
++++ b/src/repairwheel/_vendor/delocate/cmd/delocate_listdeps.py
+@@ -10,9 +10,9 @@ from os import getcwd
+ from os.path import isdir, realpath
+ from os.path import sep as psep
+ 
+-from delocate import __version__, wheel_libs
+-from delocate.delocating import filter_system_libs
+-from delocate.libsana import stripped_lib_dict, tree_libs_from_directory
++from .. import __version__, wheel_libs
++from ..delocating import filter_system_libs
++from ..libsana import stripped_lib_dict, tree_libs_from_directory
+ 
+ 
+ def main():
+diff --git a/src/repairwheel/_vendor/delocate/cmd/delocate_patch.py b/src/repairwheel/_vendor/delocate/cmd/delocate_patch.py
+index 9dfa305..39f0d70 100644
+--- a/src/repairwheel/_vendor/delocate/cmd/delocate_patch.py
++++ b/src/repairwheel/_vendor/delocate/cmd/delocate_patch.py
+@@ -12,7 +12,7 @@ from optparse import Option, OptionParser
+ from os.path import basename, exists, expanduser
+ from os.path import join as pjoin
+ 
+-from delocate import __version__, patch_wheel
++from .. import __version__, patch_wheel
+ 
+ 
+ def main():
+diff --git a/src/repairwheel/_vendor/delocate/cmd/delocate_path.py b/src/repairwheel/_vendor/delocate/cmd/delocate_path.py
+index 78f4b9c..b2109c5 100644
+--- a/src/repairwheel/_vendor/delocate/cmd/delocate_path.py
++++ b/src/repairwheel/_vendor/delocate/cmd/delocate_path.py
+@@ -8,7 +8,7 @@ import os
+ import sys
+ from optparse import Option, OptionParser
+ 
+-from delocate import __version__, delocate_path
++from .. import __version__, delocate_path
+ 
+ 
+ def main():
+diff --git a/src/repairwheel/_vendor/delocate/cmd/delocate_wheel.py b/src/repairwheel/_vendor/delocate/cmd/delocate_wheel.py
+index 9e6f45d..9d727ce 100644
+--- a/src/repairwheel/_vendor/delocate/cmd/delocate_wheel.py
++++ b/src/repairwheel/_vendor/delocate/cmd/delocate_wheel.py
+@@ -14,7 +14,7 @@ from os.path import basename, exists, expanduser
+ from os.path import join as pjoin
+ from typing import List, Optional, Text
+ 
+-from delocate import __version__, delocate_wheel
++from .. import __version__, delocate_wheel
+ 
+ 
+ def main() -> None:
+diff --git a/src/repairwheel/_vendor/delocate/delocating.py b/src/repairwheel/_vendor/delocate/delocating.py
+index c298fb0..254473c 100644
+--- a/src/repairwheel/_vendor/delocate/delocating.py
++++ b/src/repairwheel/_vendor/delocate/delocating.py
+@@ -11,6 +11,7 @@ import warnings
+ from os.path import abspath, basename, dirname, exists
+ from os.path import join as pjoin
+ from os.path import realpath, relpath
++from pathlib import Path
+ from subprocess import PIPE, Popen
+ from typing import (
+     Callable,
+@@ -137,7 +138,7 @@ def _analyze_tree_libs(
+             # @rpath, etc, at this point should never happen.
+             raise DelocationError("%s was expected to be resolved." % required)
+         r_ed_base = basename(required)
+-        if relpath(required, rp_root_path).startswith(".."):
++        if Path(rp_root_path) not in Path(required).parents:
+             # Not local, plan to copy
+             if r_ed_base in copied_basenames:
+                 raise DelocationError(
+@@ -382,6 +383,8 @@ def _dylibs_only(filename: str) -> bool:
+ 
+ 
+ def filter_system_libs(libname: str) -> bool:
++    _, libname = os.path.splitdrive(libname)
++    libname = Path(libname).as_posix()
+     return not (libname.startswith("/usr/lib") or libname.startswith("/System"))
+ 
+ 
+diff --git a/src/repairwheel/_vendor/delocate/libsana.py b/src/repairwheel/_vendor/delocate/libsana.py
+index 6ba4b7b..78c4747 100644
+--- a/src/repairwheel/_vendor/delocate/libsana.py
++++ b/src/repairwheel/_vendor/delocate/libsana.py
+@@ -10,6 +10,7 @@ import warnings
+ from os.path import basename, dirname
+ from os.path import join as pjoin
+ from os.path import realpath
++from pathlib import Path
+ from typing import (
+     Callable,
+     Dict,
+@@ -22,7 +23,7 @@ from typing import (
+     Tuple,
+ )
+ 
+-import delocate.delocating
++from . import delocating
+ 
+ from .tmpdirs import TemporaryDirectory
+ from .tools import (
+@@ -42,6 +43,8 @@ class DependencyNotFound(Exception):
+ 
+ 
+ def _filter_system_libs(libname: Text) -> bool:
++    _, libname = os.path.splitdrive(libname)
++    libname = Path(libname).as_posix()
+     return not (libname.startswith("/usr/lib") or libname.startswith("/System"))
+ 
+ 
+@@ -318,7 +321,7 @@ def _tree_libs_from_libraries(
+     if missing_libs and not ignore_missing:
+         # get_dependencies will already have logged details of missing
+         # libraries.
+-        raise delocate.delocating.DelocationError(
++        raise delocating.DelocationError(
+             "Could not find all dependencies."
+         )
+ 
+diff --git a/src/repairwheel/_vendor/delocate/wheeltools.py b/src/repairwheel/_vendor/delocate/wheeltools.py
+index f43546a..14e9ff3 100644
+--- a/src/repairwheel/_vendor/delocate/wheeltools.py
++++ b/src/repairwheel/_vendor/delocate/wheeltools.py
+@@ -17,9 +17,9 @@ from os.path import sep as psep
+ from os.path import splitext
+ from typing import Iterable, Optional, Union, overload
+ 
+-from delocate.pkginfo import read_pkg_info, write_pkg_info
+ from packaging.utils import parse_wheel_filename
+ 
++from .pkginfo import read_pkg_info, write_pkg_info
+ from .tmpdirs import InTemporaryDirectory
+ from .tools import dir2zip, open_rw, unique_by_index, zip2dir
+ 
