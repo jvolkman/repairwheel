@@ -51,7 +51,9 @@ dependencies = [
 ]
 
 [tool.hatch.envs.test.scripts]
-test = "pytest -v tests/"
+test = "pytest -v tests/ --ignore tests/gen_check/"
+generate = "pytest -v tests/gen_check/test_generate.py"
+check = "pytest -v tests/gen_check/test_check.py"
 
 [tool.vendoring]
 destination = "src/repairwheel/_vendor/"
