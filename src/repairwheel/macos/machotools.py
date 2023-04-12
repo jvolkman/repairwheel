@@ -150,7 +150,8 @@ def get_install_names(filename: str) -> Tuple[str, ...]:
                 continue
 
             # cmd.name is type lc_str, whose documentation says:
-            # > A long integer. A byte offset from the start of the load command that contains this string to the start of the string data
+            # > A long integer. A byte offset from the start of the load command that contains this
+            #   string to the start of the string data
             #
             # lc_str_value takes care of getting the actual string value, and trimming trailing nulls.
             results.append(lc_str_value(cmd.name, entry).decode("utf-8"))

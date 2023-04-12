@@ -18,4 +18,4 @@ def test_testwheel(patched_windows_x86_64_wheel):
                     assert is_mangled(name), f"{name} is mangled"
                     break
         else:
-            assert False, "did not find testdep dll"
+            raise AssertionError("did not find testdep dll")

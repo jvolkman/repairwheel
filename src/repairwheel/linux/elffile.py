@@ -102,7 +102,8 @@ class ElfIdent(Structure):
     ]
 
 
-_Elf32_Ehdr_fields = ElfIdent._fields_ + [
+_Elf32_Ehdr_fields = [
+    *ElfIdent._fields_,
     ("e_type", Elf32_Half),
     ("e_machine", Elf32_Half),
     ("e_version", Elf32_Word),
@@ -129,7 +130,8 @@ class Elf32_Ehdr_LE(Structure):
     _fields_ = _Elf32_Ehdr_fields
 
 
-_Elf64_Ehdr_fields = ElfIdent._fields_ + [
+_Elf64_Ehdr_fields = [
+    *ElfIdent._fields_,
     ("e_type", Elf64_Half),
     ("e_machine", Elf64_Half),
     ("e_version", Elf64_Word),
@@ -990,9 +992,10 @@ class ElfFile:
         vm_offset: int,
         new_soname: Optional[bytes] = None,
         new_rpath: Optional[bytes] = None,
-        needed_replacements: Dict[bytes, bytes] = {},
+        needed_replacements: Optional[Dict[bytes, bytes]] = None,
         add_new_load: bool = False,
     ) -> Tuple[SectionInfo, SectionInfo]:
+        needed_replacements = needed_replacements or {}
         cur_needed_names = []
         cur_rpath = b""
         cur_runpath = b""
@@ -1113,10 +1116,12 @@ class ElfFile:
         self,
         new_soname: Optional[bytes] = None,
         new_rpath: Optional[bytes] = None,
-        needed_replacements: Dict[bytes, bytes] = {},
+        needed_replacements: Optional[Dict[bytes, bytes]] = None,
     ) -> None:
         if self.ehdr.e_type != ET_DYN:
             raise ValueError("Not a dynamic file (ET_DYN)")
+
+        needed_replacements = needed_replacements or {}
 
         self._fh.seek(0, 2)
         file_end = self._fh.tell()

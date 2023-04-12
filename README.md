@@ -4,8 +4,8 @@ This project aims to be a combination of `auditwheel`, `delocate`, and `delvewhe
 
 Very much a WIP.
 
-
 ## Usage
+
 ```
 usage: repairwheel [-h] -o OUTPUT_DIR [-l LIB_DIR] wheel
 
@@ -19,6 +19,7 @@ options:
 ```
 
 ## Example
+
 ```shell
 $ repairwheel \
   tests/testwheel/cp36-abi3-macosx_10_11_arm64/testwheel-0.0.1-cp36-abi3-macosx_10_11_arm64.whl \

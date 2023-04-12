@@ -461,9 +461,9 @@ def _ad_hoc_sign(filename: str, fh: BinaryIO) -> None:
             fzero(fh, start, end - start)
 
         # Update the fat structures
-        for arch, fat_arch in zip(arch_infos, fat_info.archs):
-            fat_arch.offset = arch.new_offset
-            fat_arch.size = arch.new_size
+        for arch, fat_info_arch in zip(arch_infos, fat_info.archs):
+            fat_info_arch.offset = arch.new_offset
+            fat_info_arch.size = arch.new_size
 
         # Rewrite the fat structure
         fh.seek(0)
@@ -508,7 +508,7 @@ def _ad_hoc_sign(filename: str, fh: BinaryIO) -> None:
     macho.write(fh)
 
     # Lastly, write our actual signatures.
-    for arch, header in zip(arch_infos, macho.headers):
+    for arch in arch_infos:
         if not arch.signature_needed:
             continue
 
