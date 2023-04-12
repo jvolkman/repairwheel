@@ -992,6 +992,7 @@ class ElfFile:
         new_rpath: Optional[bytes] = None,
         needed_replacements: Optional[Dict[bytes, bytes]] = None,
         add_new_load: bool = False,
+        place_phdrs_at_start_of_section: bool = False,
     ) -> Tuple[SectionInfo, SectionInfo]:
         needed_replacements = needed_replacements or {}
         cur_needed_names = []
@@ -1048,7 +1049,10 @@ class ElfFile:
         # Now we can write to our new buffer
         pos = PositionTracker(file_offset, vm_offset)
 
-        # self._write_phdrs(buf, pos, SectionInfo(0, 0, 0), add_new_load)
+        if place_phdrs_at_start_of_section:
+            # write the PHDRS section with some mock data, just to take up the
+            # proper amount of space. We'll come back and overwrite at the end.
+            self._write_phdrs(buf, pos, SectionInfo(0, 0, 0), add_new_load)
 
         # .dynstr
         dynstr_pos = self._write_dynstr(buf, pos, new_dynstr)
@@ -1068,7 +1072,8 @@ class ElfFile:
         shdr_pos = self._write_shdrs(buf, pos, dynstr_pos, dynamic_pos, verneed_pos)
 
         # phdrs
-        # pos.back_to_start()
+        if place_phdrs_at_start_of_section:
+            pos.back_to_start()
         phdr_pos = self._write_phdrs(buf, pos, dynamic_pos, add_new_load)
 
         return phdr_pos, shdr_pos, dynamic_pos
