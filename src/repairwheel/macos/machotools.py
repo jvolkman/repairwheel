@@ -140,6 +140,7 @@ def get_install_names(filename: str) -> Tuple[str, ...]:
     InstallNameError
         On any unexpected output from ``otool``.
     """
+
     # otool -L
     def _val(header: MachOHeader) -> Tuple[str]:
         results = []
@@ -183,6 +184,7 @@ def get_install_id(filename: str) -> Optional[str]:
     NotImplementedError
         If ``filename`` has different install ids per-architecture.
     """
+
     # otool -D
     def _val(header: MachOHeader) -> Optional[str]:
         if header.id_cmd is not None:
@@ -288,6 +290,7 @@ def get_rpaths(filename: str) -> Tuple[str, ...]:
     InstallNameError
         On any unexpected output from ``otool``.
     """
+
     # otool -l
     def _val(header: MachOHeader) -> Tuple[str]:
         results = []
