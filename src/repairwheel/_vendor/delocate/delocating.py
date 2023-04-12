@@ -56,6 +56,11 @@ class DelocationError(Exception):
     pass
 
 
+def posix_relpath(path: str, start: str = None) -> str:
+    rel = relpath(path, start)
+    return Path(rel).as_posix()
+
+
 def delocate_tree_libs(
     lib_dict: Mapping[Text, Mapping[Text, Text]],
     lib_path: Text,
@@ -205,7 +210,7 @@ def _update_install_names(
     for required in files_to_delocate:
         # Set relative path for local library
         for requiring, orig_install_name in lib_dict[required].items():
-            req_rel = relpath(required, dirname(requiring))
+            req_rel = posix_relpath(required, dirname(requiring))
             new_install_name = "@loader_path/" + req_rel
             if orig_install_name == new_install_name:
                 logger.info(
@@ -673,7 +678,7 @@ def delocate_wheel(
         ]
         _make_install_name_ids_unique(
             libraries=libraries_in_lib_path,
-            install_id_prefix=DLC_PREFIX + relpath(lib_sdir, wheel_dir),
+            install_id_prefix=DLC_PREFIX + posix_relpath(lib_sdir, wheel_dir),
         )
         rewrite_record(wheel_dir)
         if len(copied_libs) or not in_place:
