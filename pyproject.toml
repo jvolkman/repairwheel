@@ -31,6 +31,9 @@ dependencies = [
   "pyelftools >= 0.24",
 ]
 
+[project.scripts]
+repairwheel = "repairwheel.repair:main"
+
 [tool.black]
 line-length = 127
 target-version = ["py311", "py310", "py39", "py38", "py37"]
