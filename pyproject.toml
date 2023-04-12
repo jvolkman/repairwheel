@@ -34,6 +34,9 @@ dependencies = [
 [tool.black]
 line-length = 127
 target-version = ["py311", "py310", "py39", "py38", "py37"]
+extend-exclude = '''
+src/repairwheel/_vendor
+'''
 
 [tool.isort]
 profile = "black"
