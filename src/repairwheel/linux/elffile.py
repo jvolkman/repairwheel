@@ -692,17 +692,15 @@ class ElfFile:
 
     @cached_property
     def verneed_entries(self) -> List[VerneedEntry]:
-        verneed_pos = None
         verneed_num = None
         for d in self.dyn:
-            if d.d_tag == DT_VERNEED:
-                verneed_pos = d.d_ptr_or_val
-            elif d.d_tag == DT_VERNEEDNUM:
+            if d.d_tag == DT_VERNEEDNUM:
                 verneed_num = d.d_ptr_or_val
 
         result = []
         verneed_shdr = self.find_shdr(b".gnu.version_r")
-        if verneed_pos and verneed_num and verneed_shdr:
+        if verneed_num and verneed_shdr:
+            verneed_pos = verneed_shdr.sh_offset
             # We get the string table index from the corresponding verneed section's sh_link
             verneed_strtab_shdr = self.shdrs[verneed_shdr.sh_link]
             with self._peek() as fh:
