@@ -3,7 +3,6 @@
 import argparse
 import base64
 import hashlib
-import io
 import shutil
 import subprocess
 import tarfile
@@ -12,7 +11,7 @@ import urllib.request
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import BinaryIO, Dict, List
+from typing import Dict, List
 
 
 SCRIPT_DIR = Path(__file__).parent.resolve()

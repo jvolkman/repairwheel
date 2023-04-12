@@ -41,13 +41,34 @@ extend-exclude = '''
 src/repairwheel/_vendor
 '''
 
-[tool.isort]
-profile = "black"
-lines_between_types = 1
-lines_after_imports = 2
-line_length = 127
-known_first_party = "build"
-skip = []  # "build" is included in the default skip list
+[tool.ruff]
+line-length = 127
+select = [
+  "B",    # flake8-bugbear
+  "C4",   # flake8-comprehensions
+  "C9",   # mccabe
+  "E",    # pycodestyle
+  "F",    # pyflakes
+  "PGH",  # pygrep-hooks
+  "RUF",  # ruff
+  "UP",   # pyupgrade
+  "W",    # pycodestyle
+  "W",    # pycodestyle
+  "YTT",  # flake8-2020
+]
+ignore = [
+  "C901", # Function is too complex
+]
+src = ["src"]
+target-version = "py37"
+
+[tool.ruff.mccabe]
+max-complexity = 10
+
+[tool.ruff.isort]
+lines-between-types = 1
+lines-after-imports = 2
+known-first-party = ["build"]
 
 [tool.hatch]
 

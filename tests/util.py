@@ -1,12 +1,10 @@
 import os
-import platform
 import subprocess
 import sys
 import tempfile
 import venv
 from pathlib import Path
 
-import pytest
 from packaging.tags import sys_tags
 from packaging.utils import parse_wheel_filename
 

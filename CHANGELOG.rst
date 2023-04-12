@@ -5,5 +5,5 @@ Changelog
 
 Unreleased
 ==========
-  
+
 - Foo

@@ -13,7 +13,7 @@ def test_wheel_contains_testdep(patched_wheel: Path) -> None:
             if "testdep" in file.filename.lower():
                 break
         else:
-            assert False, f"testdep not found in wheel: {patched_wheel}"
+            raise AssertionError(f"testdep not found in wheel: {patched_wheel}")
 
 
 def test_wheel_installs_and_runs(patched_wheel: Path) -> None:
