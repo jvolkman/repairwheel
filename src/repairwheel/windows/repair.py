@@ -9,7 +9,7 @@ def repair(wheel: Path, output_path: Path, lib_path: List[Path], verbosity: int 
     args = [
         sys.executable,
         "-m",
-        "delvewheel",
+        "repairwheel._vendor.delvewheel",
         "repair",
         str(wheel),
         "--wheel-dir",

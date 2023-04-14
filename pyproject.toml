@@ -24,12 +24,11 @@ classifiers = [
 urls.homepage = "https://github.com/jvolkman/repairwheel"
 
 dependencies = [
-  "delvewheel@git+https://github.com/jvolkman/delvewheel#egg=eb3a332",
-#  "delvewheel == 1.3.5",
   "importlib_metadata; python_version < \"3.8\"",
   "macholib >= 1.16",
   "packaging >= 23.0",
   "pyelftools >= 0.24",
+  "pefile >= 2023.2.7",  # for delvewheel
 ]
 
 [project.scripts]
