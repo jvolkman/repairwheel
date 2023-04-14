@@ -50,4 +50,4 @@ def test_check_reproducibility() -> None:
             non_reproducible.append(wheel_name)
 
     if non_reproducible:
-        raise AssertionError("Wheels are not reproducible: " + non_reproducible)
+        raise AssertionError(f"Wheels are not reproducible: {non_reproducible}")

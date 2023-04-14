@@ -161,7 +161,7 @@ def write_canonical_wheel(
         mode = original_modes.get(patched_info.filename, default_file_mode)
         out_info.external_attr = (mode & 0xFFFF) << 16
 
-        record_buf = StringIO()
+        record_buf = StringIO(newline="\n")
         record_writer = csv.writer(record_buf, delimiter=",", quotechar='"', lineterminator="\n")
         record_writer.writerows(records)
         record_writer.writerow((record_name, "", ""))
