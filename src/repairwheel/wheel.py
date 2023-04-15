@@ -67,8 +67,8 @@ def write_canonical_wheel(
     original_wheel: Path,
     patched_wheel: Path,
     out_dir: Path,
-    default_file_mode: int = 0o644,
-    default_dir_mode: int = 0o755,
+    default_file_mode: int = 0o664,
+    default_dir_mode: int = 0o775,
     mtime: datetime = DEFAULT_MTIME,
     compression: int = zipfile.ZIP_DEFLATED,
 ) -> Path:
