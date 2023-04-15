@@ -1,8 +1,11 @@
 # repairwheel
 
-This project aims to be a combination of `auditwheel`, `delocate`, and `delvewheel` written in pure Python and able to run cross-platform.
+[![CI - Test](https://github.com/jvolkman/repairwheel/actions/workflows/test.yml/badge.svg)](https://github.com/jvolkman/repairwheel/actions/workflows/test.yml)
+[![PyPI - Version](https://img.shields.io/pypi/v/repairwheel.svg?logo=pypi&label=PyPI&logoColor=gold)](https://pypi.org/project/repairwheel/)
 
-Very much a WIP.
+</div>
+
+This project aims to be a combination of `auditwheel`, `delocate`, and `delvewheel` written in pure Python and able to run cross-platform.
 
 ## Usage
 
