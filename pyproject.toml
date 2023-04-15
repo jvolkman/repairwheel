@@ -72,6 +72,14 @@ known-first-party = ["build"]
 
 [tool.hatch]
 
+[tool.hatch.build.targets.sdist]
+exclude = [
+  "/.*",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/repairwheel"]
+
 [tool.hatch.metadata]
 allow-direct-references = true
 
