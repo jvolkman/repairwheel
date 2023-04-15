@@ -88,32 +88,38 @@ def write_canonical_wheel(
         original_modes = {zi.filename: (zi.external_attr >> 16) & 0xFFFF for zi in original_wheel_zip.infolist()}
 
     mtime_args = mtime.timetuple()[:6]
+
+    def new_info(filename: str, is_dir: bool = False) -> ZipInfo:
+        result = ZipInfo(filename, mtime_args)
+        result.create_system = 3  # Always set the create system to be 'unixy'
+        result.file_size = 0  # Caller should set this for files
+        if is_dir:
+            mode = original_modes.get(filename, default_dir_mode)
+            result.external_attr = (mode & 0xFFFF) << 16
+            result.external_attr |= 0x10  # MS-DOS directory flag
+        else:
+            result.compress_type = compression
+            mode = original_modes.get(filename, default_file_mode)
+            result.external_attr = (mode & 0xFFFF) << 16
+
+        return result
+
     with ZipFile(patched_wheel) as patched_wheel_zip, ZipFile(out_wheel, mode="w", compression=compression) as out_wheel_zip:
         records = []
         for patched_info in _sorted_zip_entries(patched_wheel_zip):
-            out_info = ZipInfo(patched_info.filename, mtime_args)
-            out_info.create_system = 3  # Always set the create system to be 'unixy'
             if patched_info.is_dir():
-                out_info.file_size = 0
-                mode = original_modes.get(patched_info.filename, default_dir_mode)
-                out_info.external_attr = (mode & 0xFFFF) << 16
-                out_info.external_attr |= 0x10  # MS-DOS directory flag
+                out_info = new_info(patched_info.filename, True)
                 out_wheel_zip.writestr(out_info, b"")
             else:
+                out_info = new_info(patched_info.filename)
                 out_info.file_size = patched_info.file_size
-                out_info.compress_type = compression
-                mode = original_modes.get(patched_info.filename, default_file_mode)
-                out_info.external_attr = (mode & 0xFFFF) << 16
                 with patched_wheel_zip.open(patched_info) as in_file, out_wheel_zip.open(out_info, "w") as out_file:
                     hash, size = _copy_and_hash(in_file, out_file)
                     records.append((patched_info.filename, hash, size))
 
         # Write a new RECORD file at the end.
         record_name = f"{dist_name}-{dist_version}.dist-info/RECORD"
-        out_info = ZipInfo(record_name, mtime_args)
-        out_info.compress_type = compression
-        mode = original_modes.get(patched_info.filename, default_file_mode)
-        out_info.external_attr = (mode & 0xFFFF) << 16
+        record_info = new_info(record_name)
 
         record_buf = StringIO(newline="\n")
         record_writer = csv.writer(record_buf, delimiter=",", quotechar='"', lineterminator="\n")
@@ -123,8 +129,8 @@ def write_canonical_wheel(
         record_bytes = record_buf.getvalue().encode("utf-8")
         record_buf.close()
 
-        out_info.file_size = len(record_bytes)
-        with out_wheel_zip.open(out_info, "w") as out_file:
-            out_file.write(record_bytes)
+        record_info.file_size = len(record_bytes)
+        with out_wheel_zip.open(record_info, "w") as record_file:
+            record_file.write(record_bytes)
 
     return out_wheel
