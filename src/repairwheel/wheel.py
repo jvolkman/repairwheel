@@ -92,6 +92,7 @@ def write_canonical_wheel(
         records = []
         for patched_info in _sorted_zip_entries(patched_wheel_zip):
             out_info = ZipInfo(patched_info.filename, mtime_args)
+            out_info.create_system = 3  # Always set the create system to be 'unixy'
             if patched_info.is_dir():
                 out_info.file_size = 0
                 mode = original_modes.get(patched_info.filename, default_dir_mode)
