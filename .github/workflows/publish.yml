@@ -19,6 +19,9 @@ jobs:
       - name: Install build dependencies
         run: python -m pip install --upgrade hatch
 
+      - name: Build artifacts
+        run: hatch build
+
       - name: Push build artifacts to PyPI
         env:
           HATCH_INDEX_USER: __token__
