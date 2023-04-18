@@ -26,7 +26,7 @@ urls.homepage = "https://github.com/jvolkman/repairwheel"
 dependencies = [
   "importlib_metadata; python_version < \"3.8\"",
   "macholib >= 1.16",
-  "packaging >= 23.0",
+  "packaging >= 20.9",
   "pyelftools >= 0.24",
   "pefile >= 2023.2.7",  # for delvewheel
 ]
