@@ -7,7 +7,7 @@ import zipfile
 from datetime import datetime
 from io import StringIO
 from pathlib import Path
-from typing import BinaryIO, List, Tuple
+from typing import BinaryIO, List, Optional, Tuple
 from zipfile import ZipFile, ZipInfo
 
 from packaging.utils import parse_wheel_filename
@@ -68,7 +68,7 @@ def write_canonical_wheel(
     out_dir: Path,
     default_file_mode: int = 0o664,
     default_dir_mode: int = 0o775,
-    mtime: datetime = DEFAULT_MTIME,
+    mtime: Optional[datetime] = None,
     compression: int = zipfile.ZIP_DEFLATED,
 ) -> Path:
     """This function rewrites a wheel in a canonical form.
@@ -80,6 +80,9 @@ def write_canonical_wheel(
     Because Windows doesn't support posix file modes, we use corresponding modes in the original file if they exist.
     Else we use the default mode.
     """
+    if mtime is None:
+        mtime = DEFAULT_MTIME
+
     out_wheel = out_dir / patched_wheel.name
     dist_name, dist_version, _, _ = parse_wheel_filename(patched_wheel.name)
 
