@@ -1,4 +1,5 @@
 import argparse
+import shutil
 import sys
 import tempfile
 from pathlib import Path
@@ -52,13 +53,19 @@ def find_written_wheel(wheel_dir: Path) -> Path:
     return files[0]
 
 
+def noop_repair(wheel: Path, output_path: Path, _lib_path: List[Path], _verbosity: int = 0) -> None:
+    # Simply copy the input wheel to the output directory.
+    copied_location = output_path / wheel.name
+    shutil.copyfile(wheel, copied_location)
+
+
 def main():
     parser = make_parser()
     args = parser.parse_args()
 
     original_wheel: Path = args.wheel.resolve()
     out_dir: Path = args.output_dir.resolve()
-    lib_path: List[Path] = [lp.resolve() for lp in args.lib_dir]
+    lib_path: List[Path] = [lp.resolve() for lp in (args.lib_dir or [])]
 
     if not original_wheel.is_file():
         fatal(f"File does not exist: {original_wheel}")
@@ -71,14 +78,12 @@ def main():
         fatal(f"Multiple platforms detected in wheel name ({','.join(platforms)}); not sure what to do")
 
     platform = platforms.pop()
-    if platform == "any":
-        print("Nothing to do for any wheel")
-        return
 
     fn = {
         "linux": linux_repair,
         "macos": macos_repair,
         "windows": windows_repair,
+        "any": noop_repair,
     }[platform]
 
     with tempfile.TemporaryDirectory(prefix="repairwheel") as temp_wheel_dir:

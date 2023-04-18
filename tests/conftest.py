@@ -4,6 +4,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from typing import Optional
 
 import pytest
 
@@ -12,21 +13,22 @@ import pytest
 class TestWheel:
     tag: str
     wheel: Path
-    lib_dir: Path
+    lib_dir: Optional[Path] = None
 
 
-def patch_wheel(wheel: Path, lib_dir: Path, out_dir: Path) -> None:
+def patch_wheel(wheel: Path, lib_dir: Optional[Path], out_dir: Path) -> None:
     subprocess.check_call(
         [
             sys.executable,
             "-m",
             "repairwheel",
-            "--lib-dir",
-            str(lib_dir),
             str(wheel),
             "--output-dir",
             str(out_dir),
-        ],
+        ] + ([
+            "--lib-dir",
+            str(lib_dir),
+        ] if lib_dir else []),
         env=os.environ,
     )
 
@@ -49,6 +51,20 @@ def testwheel_root() -> Path:
 def patched_wheel_area() -> Path:
     with tempfile.TemporaryDirectory(prefix="testwheel") as temp_dir:
         yield (Path(temp_dir))
+
+
+@pytest.fixture(scope="session")
+def orig_py3_none_any_wheel(testwheel_root: Path) -> TestWheel:
+    tag = "py3-none-any"
+    return TestWheel(
+        tag,
+        testwheel_root / tag / f"testwheel-0.0.1-{tag}.whl",
+    )
+
+
+@pytest.fixture(scope="session")
+def patched_py3_none_any_wheel(orig_py3_none_any_wheel: TestWheel, patched_wheel_area: Path) -> Path:
+    return get_patched_wheel(orig_py3_none_any_wheel, patched_wheel_area)
 
 
 @pytest.fixture(scope="session")
@@ -113,6 +129,7 @@ def patched_windows_x86_64_wheel(orig_windows_x86_64_wheel: TestWheel, patched_w
 
 @pytest.fixture(
     params=[
+        "patched_py3_none_any_wheel",
         "patched_linux_x86_64_wheel",
         "patched_macos_x86_64_wheel",
         "patched_macos_arm64_wheel",
