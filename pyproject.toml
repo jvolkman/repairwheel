@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "repairwheel"
-version = "0.2.1"
+version = "0.2.2"
 description = "Repair any wheel, anywhere"
 readme = "README.md"
 requires-python = ">= 3.7"
