@@ -1,4 +1,6 @@
 import argparse
+import datetime
+import os
 import shutil
 import sys
 import tempfile
@@ -63,6 +65,15 @@ def main():
     parser = make_parser()
     args = parser.parse_args()
 
+    if "SOURCE_DATE_EPOCH" in os.environ:
+        try:
+            epoch = int(os.environ["SOURCE_DATE_EPOCH"])
+            mtime = datetime.datetime.utcfromtimestamp(epoch)
+        except ValueError:
+            fatal(f"SOURCE_DATE_EPOCH value cannot be parsed as a number: {os.environ['SOURCE_DATE_EPOCH']}")
+    else:
+        mtime = None
+
     original_wheel: Path = args.wheel.resolve()
     out_dir: Path = args.output_dir.resolve()
     lib_path: List[Path] = [lp.resolve() for lp in (args.lib_dir or [])]
@@ -92,7 +103,7 @@ def main():
         patched_wheel = find_written_wheel(temp_wheel_dir)
 
         out_dir.mkdir(parents=True, exist_ok=True)
-        out_wheel = write_canonical_wheel(original_wheel, patched_wheel, out_dir)
+        out_wheel = write_canonical_wheel(original_wheel, patched_wheel, out_dir, mtime=mtime)
 
     print("Wrote", out_wheel)
 
