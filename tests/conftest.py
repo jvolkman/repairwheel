@@ -25,10 +25,15 @@ def patch_wheel(wheel: Path, lib_dir: Optional[Path], out_dir: Path) -> None:
             str(wheel),
             "--output-dir",
             str(out_dir),
-        ] + ([
-            "--lib-dir",
-            str(lib_dir),
-        ] if lib_dir else []),
+        ]
+        + (
+            [
+                "--lib-dir",
+                str(lib_dir),
+            ]
+            if lib_dir
+            else []
+        ),
         env=os.environ,
     )
 
