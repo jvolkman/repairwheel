@@ -3,10 +3,51 @@ import subprocess
 import sys
 import tempfile
 import venv
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Dict, Optional
 
 from packaging.tags import sys_tags
 from packaging.utils import parse_wheel_filename
+
+
+@dataclass
+class TestWheel:
+    __test__ = False  # Tell pytest to ignore this
+    tag: str
+    wheel: Path
+    lib_dir: Optional[Path] = None
+
+
+def patch_wheel(wheel: Path, lib_dir: Optional[Path], out_dir: Path, env: Optional[Dict[str, str]] = None) -> None:
+    subprocess.check_call(
+        [
+            sys.executable,
+            "-m",
+            "repairwheel",
+            str(wheel),
+            "--output-dir",
+            str(out_dir),
+        ]
+        + (
+            [
+                "--lib-dir",
+                str(lib_dir),
+            ]
+            if lib_dir
+            else []
+        ),
+        env=dict(os.environ, **(env or {})),
+    )
+
+
+def get_patched_wheel(testwheel: TestWheel, patched_wheel_area: Path, env: Optional[Dict[str, str]] = None) -> Path:
+    out_dir = patched_wheel_area / testwheel.tag
+    out_dir.mkdir(parents=True, exist_ok=True)
+    patch_wheel(testwheel.wheel, testwheel.lib_dir, out_dir, env)
+    files = list(out_dir.glob("*.whl"))
+    assert len(files) == 1, f"Found {len(files)} wheels in {out_dir}"
+    return files[0]
 
 
 def _call_new_python(context, *py_args, **kwargs) -> bytes:
