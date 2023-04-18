@@ -174,7 +174,7 @@ def build_wheel(build_info: BuildInfo, ext_file: Path, out_dir: Path) -> None:
 
     record_file = f"{WHEEL_NAME}-{WHEEL_VERSION}.dist-info/RECORD"
     files = {
-        f"repairwheel_test/{build_info.ext_name}": ext_bytes,
+        f"testwheel/{build_info.ext_name}": ext_bytes,
         f"{WHEEL_NAME}-{WHEEL_VERSION}.dist-info/top_level.txt": b"test\n",
         f"{WHEEL_NAME}-{WHEEL_VERSION}.dist-info/METADATA": METADATA.encode("utf-8"),
         f"{WHEEL_NAME}-{WHEEL_VERSION}.dist-info/WHEEL": build_wheel_manifest(build_info).encode("utf-8"),

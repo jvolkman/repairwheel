@@ -42,9 +42,9 @@ def check_wheel_installs_and_runs(wheel: Path) -> None:
         env.create(tmpdir)
         context = env.ensure_directories(tmpdir)
         _call_new_python(context, "-m", "pip", "install", str(wheel))
-        answer = _call_new_python(context, "-c", "from repairwheel_test import testwheel; print(testwheel.get_answer())")
+        answer = _call_new_python(context, "-c", "from testwheel import testwheel; print(testwheel.get_answer())")
         assert answer.strip() == b"42"
-        doc = _call_new_python(context, "-c", "from repairwheel_test import testwheel; print(testwheel.__doc__)")
+        doc = _call_new_python(context, "-c", "from testwheel import testwheel; print(testwheel.__doc__)")
         assert doc.strip() == b"A test wheel."
 
     return True

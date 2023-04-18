@@ -8,6 +8,8 @@ from .util import check_wheel_installs_and_runs, is_wheel_compatible
 
 
 def test_wheel_contains_testdep(patched_wheel: Path) -> None:
+    if "py3-none-any" in patched_wheel.name:
+        pytest.skip("py3-none-any wheel doesn't contain testdep")
     with zipfile.ZipFile(patched_wheel, "r") as zf:
         for file in zf.filelist:
             if "testdep" in file.filename.lower():
