@@ -1,50 +1,9 @@
-from dataclasses import dataclass
-import os
-import subprocess
-import sys
 import tempfile
 from pathlib import Path
-from typing import Optional
 
 import pytest
 
-
-@dataclass
-class TestWheel:
-    tag: str
-    wheel: Path
-    lib_dir: Optional[Path] = None
-
-
-def patch_wheel(wheel: Path, lib_dir: Optional[Path], out_dir: Path) -> None:
-    subprocess.check_call(
-        [
-            sys.executable,
-            "-m",
-            "repairwheel",
-            str(wheel),
-            "--output-dir",
-            str(out_dir),
-        ]
-        + (
-            [
-                "--lib-dir",
-                str(lib_dir),
-            ]
-            if lib_dir
-            else []
-        ),
-        env=os.environ,
-    )
-
-
-def get_patched_wheel(testwheel: TestWheel, patched_wheel_area: Path) -> Path:
-    out_dir = patched_wheel_area / testwheel.tag
-    out_dir.mkdir(parents=True, exist_ok=True)
-    patch_wheel(testwheel.wheel, testwheel.lib_dir, out_dir)
-    files = list(out_dir.glob("*.whl"))
-    assert len(files) == 1, f"Found {len(files)} wheels in {out_dir}"
-    return files[0]
+from .util import get_patched_wheel, TestWheel
 
 
 @pytest.fixture(scope="session")
