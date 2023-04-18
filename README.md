@@ -3,9 +3,22 @@
 [![CI - Test](https://github.com/jvolkman/repairwheel/actions/workflows/test.yml/badge.svg)](https://github.com/jvolkman/repairwheel/actions/workflows/test.yml)
 [![PyPI - Version](https://img.shields.io/pypi/v/repairwheel.svg?logo=pypi&label=PyPI&logoColor=gold)](https://pypi.org/project/repairwheel/)
 
-</div>
+## Overview
 
-This project aims to be a combination of `auditwheel`, `delocate`, and `delvewheel` written in pure Python and able to run cross-platform.
+- `repairwheel` combines the "repair" steps from [`auditwheel`](https://github.com/pypa/auditwheel), [`delocate`](https://github.com/matthew-brett/delocate),
+  and [`delvewheel`](https://github.com/adang1345/delvewheel) into a single tool, enabling cross-platform wheel repair.
+- It includes pure-python replacements for external tools like `patchelf`, `otool`, `install_name_tool`, and `codesign`, so no non-python dependencies are required.
+
+## What's it do?
+
+1. When invoked, `repairwheel` first looks at the platform tag on the input wheel.
+2. Based on the tag, `repairwheel` selects a repair step from `auditwheel`, `delocate`, or `delvewheel` (or nothing, if it's a pure-Python wheel)
+3. Finally, `repairwheel` rewrites the result in a canonical form ensuring that:
+   1. File timestamps are set to a constant value;
+   2. Files in the archive are ordered lexicographically; and
+   3. Files in `RECORD` are ordered lexicographically
+
+The final result _should_ be bitwise-identitcal regardless of the system used to perform the repair.
 
 ## Usage
 
