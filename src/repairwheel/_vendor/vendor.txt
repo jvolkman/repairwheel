@@ -1,3 +1,2 @@
 auditwheel==5.3.0
 delocate==0.10.4
-git+https://github.com/adang1345/delvewheel@2ca7f37#egg=delvewheel

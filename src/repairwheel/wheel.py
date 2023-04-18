@@ -27,7 +27,6 @@ def _sorted_zip_entries(file: ZipFile) -> List[ZipInfo]:
 
     skip_files = {
         f"{dist_info_prefix}RECORD",  # Skip the record file; we'll write our own.
-        f"{dist_info_prefix}DELVEWHEEL",  # This file contains non-reproducible text.
     }
 
     dist_info_infos = []

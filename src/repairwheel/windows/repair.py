@@ -9,11 +9,12 @@ def repair(wheel: Path, output_path: Path, lib_path: List[Path], verbosity: int 
     args = [
         sys.executable,
         "-m",
-        "repairwheel._vendor.delvewheel",
+        "delvewheel",
         "repair",
         str(wheel),
         "--wheel-dir",
         str(output_path),
+        "--no-diagnostic",
     ]
 
     if lib_path:
