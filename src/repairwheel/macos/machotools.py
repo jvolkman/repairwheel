@@ -1,4 +1,5 @@
 import logging
+import struct
 from typing import Callable
 from typing import FrozenSet
 from typing import Optional
@@ -20,6 +21,10 @@ from . import machosign
 
 LOG = logging.getLogger(__name__)
 T = TypeVar("T")
+
+# Errors that we ignore when attempting to read files. Delocate will attempt
+# to read all files (e.g., py.typed) even if they aren't dylibs.
+IGNORED_READ_ERRORS = (ValueError, struct.error)
 
 # Maps from macholib's CPU_TYPE_NAMES entry and get_cpu_subtype output to
 # what lipo would print
@@ -161,7 +166,7 @@ def get_install_names(filename: str) -> Tuple[str, ...]:
     try:
         macho = MachO(filename)
         return _all_arches_same_value(macho, _val)
-    except ValueError:
+    except IGNORED_READ_ERRORS:
         return ()
 
 
@@ -196,7 +201,7 @@ def get_install_id(filename: str) -> Optional[str]:
     try:
         macho = MachO(filename)
         return _all_arches_same_value(macho, _val)
-    except ValueError:
+    except IGNORED_READ_ERRORS:
         return None
 
 
@@ -308,7 +313,7 @@ def get_rpaths(filename: str) -> Tuple[str, ...]:
     try:
         macho = MachO(filename)
         return _all_arches_same_value(macho, _val)
-    except ValueError:
+    except IGNORED_READ_ERRORS:
         return ()
 
 
