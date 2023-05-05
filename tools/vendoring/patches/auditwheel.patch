@@ -2,15 +2,15 @@ diff --git a/src/repairwheel/_vendor/auditwheel/elfutils.py b/src/repairwheel/_v
 index 33527c9..a319350 100644
 --- a/src/repairwheel/_vendor/auditwheel/elfutils.py
 +++ b/src/repairwheel/_vendor/auditwheel/elfutils.py
-@@ -1,5 +1,5 @@
+@@ -3,5 +3,5 @@
 -import os
 -from os.path import basename, realpath, relpath
 +from os.path import basename
 +from pathlib import Path
- from typing import Dict, Iterator, List, Optional, Set, Tuple
+ from typing import Iterator
  
  from elftools.common.exceptions import ELFError
-@@ -130,12 +130,12 @@ def is_subdir(path: str, directory: str) -> bool:
+@@ -131,12 +131,12 @@ def is_subdir(path: str, directory: str) -> bool:
      if path is None:
          return False
  

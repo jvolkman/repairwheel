@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import itertools
 import logging
 import os
@@ -9,7 +11,7 @@ from collections import OrderedDict
 from os.path import abspath, basename, dirname, exists, isabs
 from os.path import join as pjoin
 from subprocess import check_call
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Iterable
 
 from repairwheel._vendor.auditwheel.patcher import ElfPatcher
 
@@ -32,22 +34,21 @@ WHEEL_INFO_RE = re.compile(
 
 def repair_wheel(
     wheel_path: str,
-    abis: List[str],
+    abis: list[str],
     lib_sdir: str,
     out_dir: str,
     update_tags: bool,
     patcher: ElfPatcher,
-    exclude: List[str],
+    exclude: list[str],
     strip: bool = False,
-) -> Optional[str]:
-
+) -> str | None:
     external_refs_by_fn = get_wheel_elfdata(wheel_path)[1]
 
     # Do not repair a pure wheel, i.e. has no external refs
     if not external_refs_by_fn:
         return None
 
-    soname_map = {}  # type: Dict[str, Tuple[str, str]]
+    soname_map: dict[str, tuple[str, str]] = {}
     if not isabs(out_dir):
         out_dir = abspath(out_dir)
 
@@ -68,10 +69,9 @@ def repair_wheel(
         # here, fn is a path to a python extension library in
         # the wheel, and v['libs'] contains its required libs
         for fn, v in external_refs_by_fn.items():
-            ext_libs = v[abis[0]]["libs"]  # type: Dict[str, str]
-            replacements = []  # type: List[Tuple[str, str]]
+            ext_libs: dict[str, str] = v[abis[0]]["libs"]
+            replacements: list[tuple[str, str]] = []
             for soname, src_path in ext_libs.items():
-
                 if soname in exclude:
                     logger.info(f"Excluding {soname}")
                     continue
@@ -126,7 +126,7 @@ def strip_symbols(libraries: Iterable[str]) -> None:
         check_call(["strip", "-s", lib])
 
 
-def copylib(src_path: str, dest_dir: str, patcher: ElfPatcher) -> Tuple[str, str]:
+def copylib(src_path: str, dest_dir: str, patcher: ElfPatcher) -> tuple[str, str]:
     """Graft a shared library from the system into the wheel and update the
     relevant links.
 

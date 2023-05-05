@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import functools
 import itertools
 import json
@@ -7,7 +9,6 @@ from collections import defaultdict, namedtuple
 from collections.abc import Mapping
 from copy import deepcopy
 from os.path import basename
-from typing import Dict, Set
 
 from .elfutils import (
     elf_file_filter,
@@ -62,7 +63,7 @@ def get_wheel_elfdata(wheel_fn: str):
     full_elftree = {}
     nonpy_elftree = {}
     full_external_refs = {}
-    versioned_symbols = defaultdict(lambda: set())  # type: Dict[str, Set[str]]
+    versioned_symbols: dict[str, set[str]] = defaultdict(lambda: set())
     uses_ucs2_symbols = False
     uses_PyFPE_jbuf = False
 
@@ -165,14 +166,14 @@ def get_wheel_elfdata(wheel_fn: str):
     )
 
 
-def get_external_libs(external_refs) -> Dict[str, str]:
+def get_external_libs(external_refs) -> dict[str, str]:
     """Get external library dependencies for all policies excluding the default
     linux policy
     :param external_refs: external references for all policies
     :return: {realpath: soname} e.g.
     {'/path/to/external_ref.so.1.2.3': 'external_ref.so.1'}
     """
-    result: Dict[str, str] = {}
+    result: dict[str, str] = {}
     for policy in external_refs.values():
         # linux tag (priority 0) has no white-list, do not analyze it
         if policy["priority"] == 0:

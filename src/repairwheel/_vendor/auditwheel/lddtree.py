@@ -12,13 +12,15 @@ files on disk), and we parse the dependency structure as a tree rather than
  a flat list.
 """
 
+from __future__ import annotations
+
 import errno
 import functools
 import glob
 import logging
 import os
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from elftools.elf.elffile import ELFFile
 
@@ -72,13 +74,13 @@ def readlink(path: str, root: str, prefixed: bool = False) -> str:
     return normpath((root + path) if prefixed else path)
 
 
-def dedupe(items: List[str]) -> List[str]:
+def dedupe(items: list[str]) -> list[str]:
     """Remove all duplicates from ``items`` (keeping order)"""
-    seen = {}  # type: Dict[str, str]
+    seen: dict[str, str] = {}
     return [seen.setdefault(x, x) for x in items if x not in seen]
 
 
-def parse_ld_paths(str_ldpaths: str, path: str, root: str = "") -> List[str]:
+def parse_ld_paths(str_ldpaths: str, path: str, root: str = "") -> list[str]:
     """Parse the colon-delimited list of paths and apply ldso rules to each
 
     Note the special handling as dictated by the ldso:
@@ -99,7 +101,7 @@ def parse_ld_paths(str_ldpaths: str, path: str, root: str = "") -> List[str]:
     -------
         list of processed paths
     """
-    ldpaths = []  # type: List[str]
+    ldpaths: list[str] = []
     for ldpath in str_ldpaths.split(":"):
         if ldpath == "":
             # The ldso treats "" paths as $PWD.
@@ -113,7 +115,7 @@ def parse_ld_paths(str_ldpaths: str, path: str, root: str = "") -> List[str]:
 
 
 @functools.lru_cache()
-def parse_ld_so_conf(ldso_conf: str, root: str = "/", _first: bool = True) -> List[str]:
+def parse_ld_so_conf(ldso_conf: str, root: str = "/", _first: bool = True) -> list[str]:
     """Load all the paths from a given ldso config file
 
     This should handle comments, whitespace, and "include" statements.
@@ -131,7 +133,7 @@ def parse_ld_so_conf(ldso_conf: str, root: str = "/", _first: bool = True) -> Li
     -------
     list of paths found
     """
-    paths = []  # type: List[str]
+    paths: list[str] = []
 
     dbg_pfx = "" if _first else "  "
     try:
@@ -165,7 +167,7 @@ def parse_ld_so_conf(ldso_conf: str, root: str = "/", _first: bool = True) -> Li
 
 
 @functools.lru_cache()
-def load_ld_paths(root: str = "/", prefix: str = "") -> Dict[str, List[str]]:
+def load_ld_paths(root: str = "/", prefix: str = "") -> dict[str, list[str]]:
     """Load linker paths from common locations
 
     This parses the ld.so.conf and LD_LIBRARY_PATH env var.
@@ -181,7 +183,7 @@ def load_ld_paths(root: str = "/", prefix: str = "") -> Dict[str, List[str]]:
     -------
     dict containing library paths to search
     """
-    ldpaths = {"conf": [], "env": [], "interp": []}  # type: Dict
+    ldpaths: dict = {"conf": [], "env": [], "interp": []}
 
     # Load up $LD_LIBRARY_PATH.
     env_ldpath = os.environ.get("LD_LIBRARY_PATH")
@@ -258,8 +260,8 @@ def compatible_elfs(elf1: ELFFile, elf2: ELFFile) -> bool:
 
 
 def find_lib(
-    elf: ELFFile, lib: str, ldpaths: List[str], root: str = "/"
-) -> Tuple[Optional[str], Optional[str]]:
+    elf: ELFFile, lib: str, ldpaths: list[str], root: str = "/"
+) -> tuple[str | None, str | None]:
     """Try to locate a ``lib`` that is compatible to ``elf`` in the given
     ``ldpaths``
 
@@ -269,7 +271,7 @@ def find_lib(
         The elf which the library should be compatible with (ELF wise)
     lib : str
         The library (basename) to search for
-    ldpaths : List[str]
+    ldpaths : list[str]
         A list of paths to search
     root : str
        The root path to resolve symlinks
@@ -296,11 +298,11 @@ def lddtree(
     path: str,
     root: str = "/",
     prefix: str = "",
-    ldpaths: Optional[Dict[str, List[str]]] = None,
-    display: Optional[str] = None,
+    ldpaths: dict[str, list[str]] | None = None,
+    display: str | None = None,
     _first: bool = True,
-    _all_libs: Dict = {},
-) -> Dict:
+    _all_libs: dict = {},
+) -> dict:
     """Parse the ELF dependency tree of the specified file
 
     Parameters
@@ -347,7 +349,7 @@ def lddtree(
     if _first:
         _all_libs = {}
 
-    ret = {
+    ret: dict[str, Any] = {
         "interp": None,
         "path": path if display is None else display,
         "realpath": path,
@@ -355,7 +357,7 @@ def lddtree(
         "rpath": [],
         "runpath": [],
         "libs": _all_libs,
-    }  # type: Dict[str, Any]
+    }
 
     log.debug("lddtree(%s)" % path)
 
@@ -387,9 +389,9 @@ def lddtree(
                 break
 
         # Parse the ELF's dynamic tags.
-        libs = []  # type: List[str]
-        rpaths = []  # type: List[str]
-        runpaths = []  # type: List[str]
+        libs: list[str] = []
+        rpaths: list[str] = []
+        runpaths: list[str] = []
         for segment in elf.iter_segments():
             if segment.header.p_type != "PT_DYNAMIC":
                 continue
@@ -420,7 +422,7 @@ def lddtree(
         ret["needed"] = libs
 
         # Search for the libs this ELF uses.
-        all_ldpaths = None  # type: Optional[List[str]]
+        all_ldpaths: list[str] | None = None
         for lib in libs:
             if lib in _all_libs:
                 continue

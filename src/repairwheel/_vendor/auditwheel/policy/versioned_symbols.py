@@ -1,14 +1,15 @@
+from __future__ import annotations
+
 import logging
-from typing import Dict, List, Set
 
 from . import load_policies
 
 log = logging.getLogger(__name__)
 
 
-def versioned_symbols_policy(versioned_symbols: Dict[str, Set[str]]) -> int:
+def versioned_symbols_policy(versioned_symbols: dict[str, set[str]]) -> int:
     def policy_is_satisfied(
-        policy_name: str, policy_sym_vers: Dict[str, Set[str]]
+        policy_name: str, policy_sym_vers: dict[str, set[str]]
     ) -> bool:
         policy_satisfied = True
         for name in set(required_vers) & set(policy_sym_vers):
@@ -24,12 +25,12 @@ def versioned_symbols_policy(versioned_symbols: Dict[str, Set[str]]) -> int:
                 policy_satisfied = False
         return policy_satisfied
 
-    required_vers = {}  # type: Dict[str, Set[str]]
+    required_vers: dict[str, set[str]] = {}
     for symbols in versioned_symbols.values():
         for symbol in symbols:
             sym_name, _, _ = symbol.partition("_")
             required_vers.setdefault(sym_name, set()).add(symbol)
-    matching_policies = []  # type: List[int]
+    matching_policies: list[int] = []
     for p in load_policies():
         policy_sym_vers = {
             sym_name: {sym_name + "_" + version for version in versions}
