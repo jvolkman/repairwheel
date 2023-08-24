@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import BinaryIO, List, Optional, Tuple
 from zipfile import ZipFile, ZipInfo
 
-from packaging.utils import parse_wheel_filename
+from packaging.utils import canonicalize_name, parse_wheel_filename
 
 
 DEFAULT_MTIME = datetime.fromisoformat("1980-01-01T00:00:00")
@@ -18,11 +18,24 @@ DEFAULT_MTIME = datetime.fromisoformat("1980-01-01T00:00:00")
 COPY_BUFSIZE = 1024 * 1024 if os.name == "nt" else 64 * 1024
 
 
+def _dist_normalized_name(name: str) -> str:
+    # From the "Binary distribution format" doc
+    # https://packaging.python.org/en/latest/specifications/binary-distribution-format
+    #
+    # In distribution names, any run of -_. characters (HYPHEN-MINUS, LOW LINE and FULL STOP)
+    # should be replaced with _ (LOW LINE), and uppercase characters should be replaced with
+    # corresponding lowercase ones. This is equivalent to regular name normalization followed
+    # by replacing - with _.
+    normal_name = canonicalize_name(name)
+    return normal_name.replace("-", "_")
+
+
 def _sorted_zip_entries(file: ZipFile) -> List[ZipInfo]:
     # Sort zip entries lexicographically, and place dist-info files at the end as suggested by PEP-427.
     # Filters out the RECORD and DELVEWHEEL files.
     wheel_name = Path(file.filename).name
     dist_name, dist_version, _, _ = parse_wheel_filename(wheel_name)
+    dist_name = _dist_normalized_name(dist_name)
     dist_info_prefix = f"{dist_name}-{dist_version}.dist-info/"
 
     skip_files = {
@@ -85,6 +98,7 @@ def write_canonical_wheel(
 
     out_wheel = out_dir / patched_wheel.name
     dist_name, dist_version, _, _ = parse_wheel_filename(patched_wheel.name)
+    dist_name = _dist_normalized_name(dist_name)
 
     with ZipFile(original_wheel) as original_wheel_zip:
         original_modes = {zi.filename: (zi.external_attr >> 16) & 0xFFFF for zi in original_wheel_zip.infolist()}
