@@ -14,7 +14,7 @@ log = logging.getLogger(__name__)
 def get_machine_from_wheel(wheel: Path) -> str:
     _, _, _, tags = parse_wheel_filename(wheel.name)
     tags = list(tags)
-    first_tag = list(tags)[0]
+    first_tag = next(iter(tags))
     if len(tags) > 1:
         log.warning("Wheel %s has multiple tags; using first (%s)", wheel.name, first_tag)
     platform = first_tag.platform
