@@ -59,6 +59,7 @@ select = [
 ]
 ignore = [
   "C901", # Function is too complex
+  "RUF012", # https://github.com/astral-sh/ruff/issues/5243
 ]
 src = ["src"]
 target-version = "py38"

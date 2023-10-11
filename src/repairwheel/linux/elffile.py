@@ -2,8 +2,13 @@ from contextlib import contextmanager
 import copy
 from dataclasses import dataclass
 import io
-from typing import BinaryIO, Dict, Generator, Optional, Set, Tuple
+from typing import BinaryIO
+from typing import Dict
+from typing import Generator
 from typing import List
+from typing import Optional
+from typing import Set
+from typing import Tuple
 from typing import Union
 
 from macholib.ptypes import Structure
