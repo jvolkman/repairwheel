@@ -13,11 +13,11 @@ classifiers = [
   "License :: OSI Approved :: MIT License",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3 :: Only",
-  "Programming Language :: Python :: 3.7",
   "Programming Language :: Python :: 3.8",
   "Programming Language :: Python :: 3.9",
   "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: Implementation :: CPython",
   "Programming Language :: Python :: Implementation :: PyPy",
 ]
@@ -37,7 +37,7 @@ repairwheel = "repairwheel.repair:main"
 
 [tool.black]
 line-length = 127
-target-version = ["py311", "py310", "py39", "py38", "py37"]
+target-version = ["py312", "py311", "py310", "py39", "py38"]
 extend-exclude = '''
 src/repairwheel/_vendor
 '''
@@ -61,7 +61,7 @@ ignore = [
   "C901", # Function is too complex
 ]
 src = ["src"]
-target-version = "py37"
+target-version = "py38"
 
 [tool.ruff.mccabe]
 max-complexity = 10
