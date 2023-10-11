@@ -32,7 +32,7 @@ def _dist_normalized_name(name: str) -> str:
 
 def _sorted_zip_entries(file: ZipFile) -> List[ZipInfo]:
     # Sort zip entries lexicographically, and place dist-info files at the end as suggested by PEP-427.
-    # Filters out the RECORD and DELVEWHEEL files.
+    # Filters out the RECORD file which we'll re-generate at the end.
     wheel_name = Path(file.filename).name
     dist_name, dist_version, _, _ = parse_wheel_filename(wheel_name)
     dist_name = _dist_normalized_name(dist_name)
