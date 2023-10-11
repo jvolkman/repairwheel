@@ -7,7 +7,7 @@ name = "repairwheel"
 version = "0.2.6"
 description = "Repair any wheel, anywhere"
 readme = "README.md"
-requires-python = ">= 3.7"
+requires-python = ">= 3.8"
 license.file = "LICENSE"
 classifiers = [
   "License :: OSI Approved :: MIT License",
@@ -25,7 +25,6 @@ urls.homepage = "https://github.com/jvolkman/repairwheel"
 
 dependencies = [
   "delvewheel >= 1.3.6",
-  "importlib_metadata; python_version < \"3.8\"",
   "macholib >= 1.16",
   "packaging >= 20.9",
   "pyelftools >= 0.24",
