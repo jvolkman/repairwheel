@@ -8,9 +8,11 @@ import subprocess
 import time
 import warnings
 import zipfile
+from datetime import datetime
+from os import PathLike
 from os.path import exists, isdir
 from os.path import join as pjoin
-from os.path import relpath
+from pathlib import Path
 from typing import (
     Any,
     Dict,
@@ -146,6 +148,33 @@ def _run(
             f" failed with non-zero exit code {exc.returncode}."
             f"\nstdout:{exc.stdout.strip()}\nstderr:{exc.stderr.strip()}"
         ) from exc
+
+
+# Mach-O magic numbers. See:
+# https://github.com/apple-oss-distributions/xnu/blob/5c2921b07a2480ab43ec66f5b9e41cb872bc554f/EXTERNAL_HEADERS/mach-o/loader.h#L65
+# https://github.com/apple-oss-distributions/cctools/blob/658da8c66b4e184458f9c810deca9f6428a773a5/include/mach-o/fat.h#L48
+MACHO_MAGIC = frozenset(
+    [
+        0xFEEDFACE.to_bytes(4, "little"),  # MH_MAGIC
+        0xFEEDFACE.to_bytes(4, "big"),  # MH_MAGIC
+        0xFEEDFACF.to_bytes(4, "little"),  # MH_MAGIC_64
+        0xFEEDFACF.to_bytes(4, "big"),  # MH_MAGIC_64
+        0xCAFEBABE.to_bytes(4, "big"),  # FAT_MAGIC (always big-endian)
+        0xCAFEBABF.to_bytes(4, "big"),  # FAT_MAGIC_64 (always big-endian)
+    ]
+)
+
+
+def _is_macho_file(filename: str) -> bool:
+    """Return True if file at `filename` begins with Mach-O magic number."""
+    try:
+        with open(filename, "rb") as f:
+            header = f.read(4)
+            return header in MACHO_MAGIC
+    except PermissionError:
+        return False
+    except FileNotFoundError:
+        return False
 
 
 def unique_by_index(sequence):
@@ -514,6 +543,8 @@ def get_install_names(filename: str) -> Tuple[str, ...]:
     InstallNameError
         On any unexpected output from ``otool``.
     """
+    if not _is_macho_file(filename):
+        return ()
     otool = _run(["otool", "-L", filename], check=False)
     if not _line0_says_object(otool.stdout or otool.stderr, filename):
         return ()
@@ -576,6 +607,8 @@ def _get_install_ids(filename: str) -> Dict[str, str]:
     InstallNameError
         On any unexpected output from ``otool``.
     """
+    if not _is_macho_file(filename):
+        return {}
     otool = _run(["otool", "-D", filename], check=False)
     if not _line0_says_object(otool.stdout or otool.stderr, filename):
         return {}
@@ -730,6 +763,8 @@ def get_rpaths(filename: str) -> Tuple[str, ...]:
     InstallNameError
         On any unexpected output from ``otool``.
     """
+    if not _is_macho_file(filename):
+        return ()
     otool = _run(["otool", "-l", filename], check=False)
     if not _line0_says_object(otool.stdout or otool.stderr, filename):
         return ()
@@ -779,22 +814,74 @@ def add_rpath(filename: str, newpath: str, ad_hoc_sign: bool = True) -> None:
         replace_signature(filename, "-")
 
 
-def zip2dir(zip_fname: str, out_dir: str) -> None:
+def zip2dir(
+    zip_fname: str | PathLike[str], out_dir: str | PathLike[str]
+) -> None:
     """Extract `zip_fname` into output directory `out_dir`
 
     Parameters
     ----------
-    zip_fname : str
+    zip_fname : str or Path-like
         Filename of zip archive to write
-    out_dir : str
+    out_dir : str or Path-like
         Directory path containing files to go in the zip archive
     """
-    # Use unzip command rather than zipfile module to preserve permissions
+    # The zipfile module does not preserve permissions correctly
     # http://bugs.python.org/issue15795
-    _run(["unzip", "-o", "-d", out_dir, zip_fname], check=True)
+    # external_attr is not well documented but you can learn about it here
+    # https://unix.stackexchange.com/questions/14705/the-zip-formats-external-file-attribute
+    with zipfile.ZipFile(zip_fname, "r") as zip:
+        for name in zip.namelist():
+            member = zip.getinfo(name)
+            extracted_path = zip.extract(member, out_dir)
+            unix_attrs = member.external_attr >> 16
+            if member.is_dir():
+                os.chmod(extracted_path, 0o755)
+            elif unix_attrs != 0:
+                permissions = unix_attrs & 0o777
+                os.chmod(extracted_path, permissions)
+            # Restore timestamp
+            modified_time = datetime(*member.date_time).timestamp()
+            os.utime(extracted_path, (modified_time, modified_time))
 
 
-def dir2zip(in_dir, zip_fname):
+_ZIP_TIMESTAMP_MIN = 315532800  # 1980-01-01 00:00:00 UTC
+_DateTuple = Tuple[int, int, int, int, int, int]
+
+
+def _get_zip_datetime(
+    date_time: Optional[_DateTuple] = None,
+) -> Optional[_DateTuple]:
+    """Utility function to support reproducible builds
+
+    https://reproducible-builds.org/docs/source-date-epoch/
+
+    Parameters
+    ----------
+    date_time : tuple of int, optional
+        Datetime tuple ``(Y, m, d, H, M, S)``.
+
+    Returns
+    -------
+    zip_date_time : tuple of int, optional
+        Datetime tuple corresponding to the ``SOURCE_DATE_EPOCH``
+        environment variable if set, otherwise the input `date_time`.
+    """
+    source_date_epoch = os.environ.get("SOURCE_DATE_EPOCH")
+    if source_date_epoch is not None:
+        timestamp = max(int(source_date_epoch), _ZIP_TIMESTAMP_MIN)
+        date_time = time.gmtime(timestamp)[0:6]
+    return date_time
+
+
+def dir2zip(
+    in_dir: str | PathLike[str],
+    zip_fname: str | PathLike[str],
+    *,
+    compression: int = zipfile.ZIP_DEFLATED,
+    compress_level: int = -1,
+    date_time: Optional[_DateTuple] = None,
+) -> None:
     """Make a zip file `zip_fname` with contents of directory `in_dir`
 
     The recorded filenames are relative to `in_dir`, so doing a standard zip
@@ -803,33 +890,41 @@ def dir2zip(in_dir, zip_fname):
 
     Parameters
     ----------
-    in_dir : str
+    in_dir : str or Path-like
         Directory path containing files to go in the zip archive
-    zip_fname : str
+    zip_fname : str or Path-like
         Filename of zip archive to write
+    compression : int, optional, keyword-only
+        The zipfile compression type used.
+    compress_level : int, optional, keyword-only
+        The compression level used for this archive.
+    date_time : tuple of int, optional, keyword-only
+        Datetime tuple ``(Y, m, d, H, M, S)`` for all recorded entries.
     """
-    z = zipfile.ZipFile(zip_fname, "w", compression=zipfile.ZIP_DEFLATED)
-    for root, dirs, files in os.walk(in_dir):
-        for file in files:
-            in_fname = pjoin(root, file)
-            in_stat = os.stat(in_fname)
-            # Preserve file permissions, but allow copy
-            info = zipfile.ZipInfo(in_fname)
-            info.filename = relpath(in_fname, in_dir)
-            if os.path.sep == "\\":
-                # Make the path unix friendly on windows.
-                # PyPI won't accept wheels with windows path separators
-                info.filename = relpath(in_fname, in_dir).replace("\\", "/")
-            # Set time from modification time
-            info.date_time = time.localtime(in_stat.st_mtime)
-            # See https://stackoverflow.com/questions/434641/how-do-i-set-permissions-attributes-on-a-file-in-a-zip-file-using-pythons-zip/48435482#48435482 # noqa: E501
-            # Also set regular file permissions
-            perms = stat.S_IMODE(in_stat.st_mode) | stat.S_IFREG
-            info.external_attr = perms << 16
-            with open_readable(in_fname, "rb") as fobj:
-                contents = fobj.read()
-            z.writestr(info, contents, zipfile.ZIP_DEFLATED)
-    z.close()
+    date_time = _get_zip_datetime(date_time)
+    with zipfile.ZipFile(
+        zip_fname, "w", compression=compression, compresslevel=compress_level
+    ) as zip:
+        for root, dirs, files in os.walk(in_dir):
+            for dir in dirs:
+                dir_path = Path(root, dir)
+                out_dir_name = str(dir_path.relative_to(in_dir)) + "/"
+                zip_info = zipfile.ZipInfo.from_file(dir_path, out_dir_name)
+                if date_time is not None:
+                    zip_info.date_time = date_time
+                zip.writestr(zip_info, b"")
+            for file in files:
+                file_path = Path(root, file)
+                out_file_path = file_path.relative_to(in_dir)
+                zip_info = zipfile.ZipInfo.from_file(file_path, out_file_path)
+                if date_time is not None:
+                    zip_info.date_time = date_time
+                zip.writestr(
+                    zip_info,
+                    file_path.read_bytes(),
+                    compress_type=compression,
+                    compresslevel=compress_level,
+                )
 
 
 def find_package_dirs(root_path: str) -> Set[str]:
