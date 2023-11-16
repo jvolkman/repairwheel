@@ -17,8 +17,6 @@ def _patch_tools():
         "get_archs",
         "replace_signature",
         "validate_signature",
-        "zip2dir",
-        "dir2zip",
     ]:
         patched_fn = getattr(patched_tools, fn_name)
         setattr(delocate_tools, fn_name, patched_fn)
