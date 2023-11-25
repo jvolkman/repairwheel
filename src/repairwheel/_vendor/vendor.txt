@@ -1,2 +1,2 @@
 git+https://github.com/pypa/auditwheel.git@1def5d7d3a777946ba1fb6361aec790c67ed710f
-delocate==0.10.5
+delocate==0.10.6

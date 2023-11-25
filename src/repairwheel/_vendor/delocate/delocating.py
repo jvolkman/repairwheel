@@ -37,6 +37,7 @@ from .libsana import (
 )
 from .tmpdirs import TemporaryDirectory
 from .tools import (
+    _remove_absolute_rpaths,
     dir2zip,
     find_package_dirs,
     get_archs,
@@ -66,6 +67,8 @@ def delocate_tree_libs(
     lib_dict: Mapping[Text, Mapping[Text, Text]],
     lib_path: Text,
     root_path: Text,
+    *,
+    sanitize_rpaths: bool = False,
 ) -> Dict[Text, Dict[Text, Text]]:
     """Move needed libraries in `lib_dict` into `lib_path`
 
@@ -93,6 +96,8 @@ def delocate_tree_libs(
         library within the subtrees of `root_path` does not get copied, but
         libraries linking to it have links adjusted to use relative path to
         this library.
+    sanitize_rpaths : bool, default=False, keyword-only
+        If True, absolute paths in rpaths of binaries are removed.
 
     Returns
     -------
@@ -118,7 +123,22 @@ def delocate_tree_libs(
     _update_install_names(
         lib_dict, root_path, libraries_to_delocate | copied_libraries
     )
+    # Remove absolute rpaths
+    if sanitize_rpaths:
+        _sanitize_rpaths(lib_dict, libraries_to_delocate | copied_libraries)
+
     return libraries_to_copy
+
+
+def _sanitize_rpaths(
+    lib_dict: Mapping[Text, Mapping[Text, Text]],
+    files_to_delocate: Iterable[Text],
+) -> None:
+    """Sanitize the rpaths of libraries."""
+    for required in files_to_delocate:
+        # Set relative path for local library
+        for requiring, orig_install_name in lib_dict[required].items():
+            _remove_absolute_rpaths(requiring)
 
 
 def _analyze_tree_libs(
@@ -415,6 +435,8 @@ def delocate_path(
     copy_filt_func: Optional[Callable[[Text], bool]] = filter_system_libs,
     executable_path: Optional[Text] = None,
     ignore_missing: bool = False,
+    *,
+    sanitize_rpaths: bool = False,
 ) -> Dict[Text, Dict[Text, Text]]:
     """Copy required libraries for files in `tree_path` into `lib_path`
 
@@ -441,6 +463,8 @@ def delocate_path(
         `@executable_path`.
     ignore_missing : bool, default=False
         Continue even if missing dependencies are detected.
+    sanitize_rpaths : bool, default=False, keyword-only
+        If True, absolute paths in rpaths of binaries are removed.
 
     Returns
     -------
@@ -483,7 +507,9 @@ def delocate_path(
         ignore_missing=ignore_missing,
     )
 
-    return delocate_tree_libs(lib_dict, lib_path, tree_path)
+    return delocate_tree_libs(
+        lib_dict, lib_path, tree_path, sanitize_rpaths=sanitize_rpaths
+    )
 
 
 def _copy_lib_dict(
@@ -572,8 +598,10 @@ def delocate_wheel(
     copy_filt_func: Optional[Callable[[str], bool]] = filter_system_libs,
     require_archs: Union[None, str, Iterable[str]] = None,
     check_verbose: Optional[bool] = None,
+    *,
     executable_path: Optional[str] = None,
     ignore_missing: bool = False,
+    sanitize_rpaths: bool = False,
 ) -> Dict[str, Dict[str, str]]:
     """Update wheel by copying required libraries to `lib_sdir` in wheel
 
@@ -592,8 +620,8 @@ def delocate_wheel(
     lib_sdir : str, optional
         Subdirectory name in wheel package directory (or directories) to store
         needed libraries.
-       Ignored if the wheel has no package directories, and only contains
-       stand-alone modules.
+        Ignored if the wheel has no package directories, and only contains
+        stand-alone modules.
     lib_filt_func : None or str or callable, optional
         If None, inspect all files for dependencies on dynamic libraries. If
         callable, accepts filename as argument, returns True if we should
@@ -619,6 +647,8 @@ def delocate_wheel(
         An alternative path to use for resolving `@executable_path`.
     ignore_missing : bool, default=False, keyword-only
         Continue even if missing dependencies are detected.
+    sanitize_rpaths : bool, default=False, keyword-only
+        If True, absolute paths in rpaths of binaries are removed.
 
     Returns
     -------
@@ -661,6 +691,7 @@ def delocate_wheel(
             copy_filt_func,
             executable_path=executable_path,
             ignore_missing=ignore_missing,
+            sanitize_rpaths=sanitize_rpaths,
         )
         if copied_libs and lib_path_exists_before_delocate:
             raise DelocationError(

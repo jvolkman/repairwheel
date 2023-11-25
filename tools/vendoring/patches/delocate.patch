@@ -1,89 +1,115 @@
+diff --git a/src/repairwheel/_vendor/delocate/cmd/common.py b/src/repairwheel/_vendor/delocate/cmd/common.py
+index d6878e5..24959f6 100644
+--- a/src/repairwheel/_vendor/delocate/cmd/common.py
++++ b/src/repairwheel/_vendor/delocate/cmd/common.py
+@@ -10,7 +10,7 @@ import sys
+ from optparse import Option, OptionParser, Values
+ from typing import Callable, List
+ 
+-from delocate.delocating import filter_system_libs
++from ..delocating import filter_system_libs
+ from typing_extensions import Literal, TypedDict
+ 
+ logger = logging.getLogger(__name__)
+
 diff --git a/src/repairwheel/_vendor/delocate/cmd/delocate_addplat.py b/src/repairwheel/_vendor/delocate/cmd/delocate_addplat.py
 index cfbe57b..cc8f4c5 100644
 --- a/src/repairwheel/_vendor/delocate/cmd/delocate_addplat.py
 +++ b/src/repairwheel/_vendor/delocate/cmd/delocate_addplat.py
-@@ -23,8 +23,8 @@ from os.path import expanduser
+@@ -23,9 +23,9 @@ from os.path import expanduser
  from os.path import join as exists
  from os.path import realpath
  
 -from delocate import __version__
+-from delocate.cmd.common import verbosity_args, verbosity_config
 -from delocate.wheeltools import WheelToolsError, add_platforms
 +from .. import __version__
++from ..cmd.common import verbosity_args, verbosity_config
 +from ..wheeltools import WheelToolsError, add_platforms
  
  
- def main():
+ def main() -> None:
 diff --git a/src/repairwheel/_vendor/delocate/cmd/delocate_fuse.py b/src/repairwheel/_vendor/delocate/cmd/delocate_fuse.py
 index 9fe6e31..3ab2ec5 100644
 --- a/src/repairwheel/_vendor/delocate/cmd/delocate_fuse.py
 +++ b/src/repairwheel/_vendor/delocate/cmd/delocate_fuse.py
-@@ -11,8 +11,8 @@ from optparse import Option, OptionParser
+@@ -11,9 +11,9 @@ from optparse import Option, OptionParser
  from os.path import abspath, basename, expanduser
  from os.path import join as pjoin
  
 -from delocate import __version__
+-from delocate.cmd.common import verbosity_args, verbosity_config
 -from delocate.fuse import fuse_wheels
 +from .. import __version__
++from ..cmd.common import verbosity_args, verbosity_config
 +from ..fuse import fuse_wheels
  
  
- def main():
+ def main() -> None:
 diff --git a/src/repairwheel/_vendor/delocate/cmd/delocate_listdeps.py b/src/repairwheel/_vendor/delocate/cmd/delocate_listdeps.py
 index 35ba44a..abde4e6 100644
 --- a/src/repairwheel/_vendor/delocate/cmd/delocate_listdeps.py
 +++ b/src/repairwheel/_vendor/delocate/cmd/delocate_listdeps.py
-@@ -10,9 +10,9 @@ from os import getcwd
+@@ -10,10 +10,10 @@ from os import getcwd
  from os.path import isdir, realpath
  from os.path import sep as psep
  
 -from delocate import __version__, wheel_libs
+-from delocate.cmd.common import verbosity_args, verbosity_config
 -from delocate.delocating import filter_system_libs
 -from delocate.libsana import stripped_lib_dict, tree_libs_from_directory
 +from .. import __version__, wheel_libs
++from ..cmd.common import verbosity_args, verbosity_config
 +from ..delocating import filter_system_libs
 +from ..libsana import stripped_lib_dict, tree_libs_from_directory
  
  
- def main():
+ def main() -> None:
 diff --git a/src/repairwheel/_vendor/delocate/cmd/delocate_patch.py b/src/repairwheel/_vendor/delocate/cmd/delocate_patch.py
 index 9dfa305..39f0d70 100644
 --- a/src/repairwheel/_vendor/delocate/cmd/delocate_patch.py
 +++ b/src/repairwheel/_vendor/delocate/cmd/delocate_patch.py
-@@ -12,7 +12,7 @@ from optparse import Option, OptionParser
+@@ -12,8 +12,8 @@ from optparse import Option, OptionParser
  from os.path import basename, exists, expanduser
  from os.path import join as pjoin
  
 -from delocate import __version__, patch_wheel
+-from delocate.cmd.common import verbosity_args, verbosity_config
 +from .. import __version__, patch_wheel
++from ..cmd.common import verbosity_args, verbosity_config
  
  
- def main():
+ def main() -> None:
 diff --git a/src/repairwheel/_vendor/delocate/cmd/delocate_path.py b/src/repairwheel/_vendor/delocate/cmd/delocate_path.py
 index 78f4b9c..b2109c5 100644
 --- a/src/repairwheel/_vendor/delocate/cmd/delocate_path.py
 +++ b/src/repairwheel/_vendor/delocate/cmd/delocate_path.py
-@@ -8,7 +8,7 @@ import os
+@@ -8,8 +8,8 @@ import os
  import sys
  from optparse import Option, OptionParser
  
 -from delocate import __version__, delocate_path
+-from delocate.cmd.common import (
 +from .. import __version__, delocate_path
- 
- 
- def main():
++from ..cmd.common import (
+     delocate_args,
+     delocate_values,
+     verbosity_args,
 diff --git a/src/repairwheel/_vendor/delocate/cmd/delocate_wheel.py b/src/repairwheel/_vendor/delocate/cmd/delocate_wheel.py
 index 9e6f45d..9d727ce 100644
 --- a/src/repairwheel/_vendor/delocate/cmd/delocate_wheel.py
 +++ b/src/repairwheel/_vendor/delocate/cmd/delocate_wheel.py
-@@ -14,7 +14,7 @@ from os.path import basename, exists, expanduser
+@@ -13,8 +13,8 @@ from os.path import basename, exists, expanduser
  from os.path import join as pjoin
  from typing import List, Optional, Text
  
 -from delocate import __version__, delocate_wheel
+-from delocate.cmd.common import (
 +from .. import __version__, delocate_wheel
- 
- 
- def main() -> None:
++from ..cmd.common import (
+     delocate_args,
+     delocate_values,
+     verbosity_args,
 diff -u b/src/repairwheel/_vendor/delocate/delocating.py b/src/repairwheel/_vendor/delocate/delocating.py
 --- b/src/repairwheel/_vendor/delocate/delocating.py
 +++ b/src/repairwheel/_vendor/delocate/delocating.py
