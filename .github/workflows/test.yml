@@ -102,7 +102,7 @@ jobs:
       - name: Install Hatch
         run: python -m pip install hatch
 
-      - uses: actions/download-artifact@v3
+      - uses: actions/download-artifact@v4
         with:
           name: patched-testwheel
           path: ${{ runner.temp }}/testwheel-out
