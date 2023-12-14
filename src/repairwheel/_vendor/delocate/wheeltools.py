@@ -10,11 +10,9 @@ import hashlib
 import os
 import sys
 from itertools import product
-from os.path import abspath, basename, dirname, exists
+from os.path import abspath, basename, dirname, exists, relpath, splitext
 from os.path import join as pjoin
-from os.path import relpath
 from os.path import sep as psep
-from os.path import splitext
 from typing import Iterable, Optional, Union, overload
 
 from packaging.utils import parse_wheel_filename

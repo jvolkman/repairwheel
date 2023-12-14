@@ -1,94 +1,89 @@
-#!python
+#!/usr/bin/env python3
 """ Copy, relink library dependencies for wheel
 
 Overwrites the wheel in-place by default
 """
 # vim: ft=python
-from __future__ import absolute_import, division, print_function
+from __future__ import annotations
 
 import os
-import sys
-from optparse import Option, OptionParser
+from argparse import ArgumentParser
 from os.path import basename, exists, expanduser
 from os.path import join as pjoin
 from typing import List, Optional, Text
 
-from .. import __version__, delocate_wheel
+from .. import delocate_wheel
 from ..cmd.common import (
-    delocate_args,
+    common_parser,
+    delocate_parser,
     delocate_values,
-    verbosity_args,
+    glob_paths,
     verbosity_config,
+)
+
+parser = ArgumentParser(
+    description=__doc__, parents=[common_parser, delocate_parser]
+)
+parser.add_argument(
+    "wheels",
+    nargs="+",
+    metavar="WHEEL",
+    type=str,
+    help="The wheel files to be delocated",
+)
+parser.add_argument(
+    "-L",
+    "--lib-sdir",
+    action="store",
+    type=str,
+    default=".dylibs",
+    help="Subdirectory in packages to store copied libraries",
+)
+parser.add_argument(
+    "-w",
+    "--wheel-dir",
+    action="store",
+    type=str,
+    help="Directory to store delocated wheels (default is to overwrite input)",
+)
+parser.add_argument(
+    "-k",
+    "--check-archs",
+    action="store_true",
+    help="Check architectures of depended libraries",
+)
+parser.add_argument(
+    "--require-archs",
+    metavar="ARCHITECTURES",
+    action="store",
+    type=str,
+    help="Architectures that all wheel libraries should have"
+    " (from 'intel', 'i386', 'x86_64', 'i386,x86_64', 'universal2',"
+    " 'x86_64,arm64')",
 )
 
 
 def main() -> None:
-    parser = OptionParser(
-        usage="%s WHEEL_FILENAME\n\n" % sys.argv[0] + __doc__,
-        version="%prog " + __version__,
-    )
-    verbosity_args(parser)
-    delocate_args(parser)
-    parser.add_options(
-        [
-            Option(
-                "-L",
-                "--lib-sdir",
-                action="store",
-                type="string",
-                default=".dylibs",
-                help="Subdirectory in packages to store copied libraries",
-            ),
-            Option(
-                "-w",
-                "--wheel-dir",
-                action="store",
-                type="string",
-                help=(
-                    "Directory to store delocated wheels (default is to "
-                    "overwrite input)"
-                ),
-            ),
-            Option(
-                "-k",
-                "--check-archs",
-                action="store_true",
-                help="Check architectures of depended libraries",
-            ),
-            Option(
-                "--require-archs",
-                action="store",
-                type="string",
-                help=(
-                    "Architectures that all wheel libraries should "
-                    "have (from 'intel', 'i386', 'x86_64', 'i386,x86_64'"
-                    "'universal2', 'x86_64,arm64')"
-                ),
-            ),
-        ]
-    )
-    (opts, wheels) = parser.parse_args()
-    verbosity_config(opts)
-    if len(wheels) < 1:
-        parser.print_help()
-        sys.exit(1)
+    args = parser.parse_args()
+    verbosity_config(args)
+    wheels = list(glob_paths(args.wheels))
     multi = len(wheels) > 1
-    if opts.wheel_dir:
-        wheel_dir = expanduser(opts.wheel_dir)
+    if args.wheel_dir:
+        wheel_dir = expanduser(args.wheel_dir)
         if not exists(wheel_dir):
             os.makedirs(wheel_dir)
     else:
         wheel_dir = None
     require_archs: Optional[List[Text]] = None
-    if opts.require_archs is None:
-        require_archs = [] if opts.check_archs else None
-    elif "," in opts.require_archs:
-        require_archs = [s.strip() for s in opts.require_archs.split(",")]
+    if args.require_archs is None:
+        require_archs = [] if args.check_archs else None
+    elif "," in args.require_archs:
+        require_archs = [s.strip() for s in args.require_archs.split(",")]
     else:
-        require_archs = opts.require_archs
+        require_archs = args.require_archs
 
     for wheel in wheels:
-        if multi or opts.verbose:
+        if multi or args.verbose:
             print("Fixing: " + wheel)
         if wheel_dir:
             out_wheel = pjoin(wheel_dir, basename(wheel))
@@ -97,12 +92,12 @@ def main() -> None:
         copied = delocate_wheel(
             wheel,
             out_wheel,
-            lib_sdir=opts.lib_sdir,
+            lib_sdir=args.lib_sdir,
             require_archs=require_archs,
-            **delocate_values(opts),
+            **delocate_values(args),
         )
-        if opts.verbose and len(copied):
-            print("Copied to package {0} directory:".format(opts.lib_sdir))
+        if args.verbose and len(copied):
+            print("Copied to package {0} directory:".format(args.lib_sdir))
             copy_lines = ["  " + name for name in sorted(copied)]
             print("\n".join(copy_lines))
 

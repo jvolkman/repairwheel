@@ -1,49 +1,46 @@
-#!python
+#!/usr/bin/env python3
 """ List library dependencies for libraries in path or wheel
 """
 # vim: ft=python
 from __future__ import absolute_import, division, print_function
 
-import sys
-from optparse import Option, OptionParser
+from argparse import ArgumentParser
 from os import getcwd
 from os.path import isdir, realpath
 from os.path import sep as psep
 
-from .. import __version__, wheel_libs
-from ..cmd.common import verbosity_args, verbosity_config
+from .. import wheel_libs
+from ..cmd.common import common_parser, glob_paths, verbosity_config
 from ..delocating import filter_system_libs
 from ..libsana import stripped_lib_dict, tree_libs_from_directory
 
+parser = ArgumentParser(description=__doc__, parents=[common_parser])
+parser.add_argument(
+    "paths",
+    nargs="+",
+    metavar="WHEEL_OR_PATH_TO_ANALYZE",
+    type=str,
+    help="Wheel or directory to check for libraries,"
+    " directories are checked recursively",
+)
+parser.add_argument(
+    "-a",
+    "--all",
+    action="store_true",
+    help="Show all dependencies, including system libs",
+)
+parser.add_argument(
+    "-d",
+    "--depending",
+    action="store_true",
+    help="Show libraries depending on dependencies",
+)
+
 
 def main() -> None:
-    parser = OptionParser(
-        usage="%s WHEEL_OR_PATH_TO_ANALYZE\n\n" % sys.argv[0] + __doc__,
-        version="%prog " + __version__,
-    )
-    verbosity_args(parser)
-    parser.add_options(
-        [
-            Option(
-                "-a",
-                "--all",
-                action="store_true",
-                help="Show all dependencies, including system libs",
-            ),
-            Option(
-                "-d",
-                "--depending",
-                action="store_true",
-                help="Show libraries depending on dependencies",
-            ),
-        ]
-    )
-    (opts, paths) = parser.parse_args()
-    verbosity_config(opts)
-    if len(paths) < 1:
-        parser.print_help()
-        sys.exit(1)
-
+    args = parser.parse_args()
+    verbosity_config(args)
+    paths = list(glob_paths(args.paths))
     multi = len(paths) > 1
     for path in paths:
         if multi:
@@ -57,9 +54,9 @@ def main() -> None:
         else:
             lib_dict = wheel_libs(path, ignore_missing=True)
         keys = sorted(lib_dict)
-        if not opts.all:
+        if not args.all:
             keys = [key for key in keys if filter_system_libs(key)]
-        if not opts.depending:
+        if not args.depending:
             if len(keys):
                 print(indent + ("\n" + indent).join(keys))
             continue
