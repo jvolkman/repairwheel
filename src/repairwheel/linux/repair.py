@@ -17,11 +17,10 @@ def get_machine_from_wheel(wheel: Path) -> str:
     first_tag = next(iter(tags))
     if len(tags) > 1:
         log.warning("Wheel %s has multiple tags; using first (%s)", wheel.name, first_tag)
-    platform = first_tag.platform
-    if platform.endswith("x86_64"):
-        return "x86_64"
-    else:
-        return platform.rsplit("_", 1)[1]
+
+    # platform is like 'linux_x86_64' or 'manylinux_aarch64'
+    _, machine = first_tag.platform.split("_", 1)
+    return machine
 
 
 def repair(wheel_file: Path, output_dir: Path, lib_path: List[Path], verbosity: int = 0) -> None:
