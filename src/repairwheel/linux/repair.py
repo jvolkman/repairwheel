@@ -21,7 +21,7 @@ def get_machine_from_wheel(wheel: Path) -> str:
     if platform.endswith("x86_64"):
         return "x86_64"
     else:
-        return platform.rsplit("_", 1)[0]
+        return platform.rsplit("_", 1)[1]
 
 
 def repair(wheel_file: Path, output_dir: Path, lib_path: List[Path], verbosity: int = 0) -> None:
