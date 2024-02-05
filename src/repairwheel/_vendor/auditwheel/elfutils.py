@@ -126,17 +126,14 @@ def elf_read_rpaths(fn: str) -> dict[str, list[str]]:
     return result
 
 
-def is_subdir(path: str, directory: str) -> bool:
+def is_subdir(path: str | Path | None, directory: str | Path) -> bool:
     if path is None:
         return False
 
     path = Path(path).resolve()
     directory = Path(directory).resolve()
 
-    if directory not in path.parents:
-        return False
-
-    return True
+    return directory in path.parents
 
 
 def get_undefined_symbols(path: str) -> set[str]:
