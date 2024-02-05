@@ -206,11 +206,7 @@ def build_wheel(build_info: BuildInfo, ext_file: Path, app_file: Optional[Path],
     if app_file:
         with open(app_file, "rb") as app_f:
             app_bytes = app_f.read()
-        files.update(
-            {
-                f"{WHEEL_NAME}-{WHEEL_VERSION}.data/scripts/app": app_bytes
-            }
-        )
+        files.update({f"{WHEEL_NAME}-{WHEEL_VERSION}.data/scripts/app": app_bytes})
 
     record = build_record(files, record_file)
     files[record_file] = record.encode("utf-8")

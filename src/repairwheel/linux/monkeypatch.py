@@ -1,10 +1,10 @@
-from importlib import reload
 from pathlib import Path
 from typing import Dict, List
 
 
 def init_policies_for_machine(machine: str) -> None:
     from repairwheel._vendor.auditwheel import policy
+
     policies_for_machine = policy.WheelPolicies(
         libc=policy.Libc.GLIBC,  # TODO: support musl somehow
         arch=machine,
