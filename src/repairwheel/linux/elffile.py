@@ -55,6 +55,7 @@ ELFCLASS64 = 2
 ELFDATA2LSB = 1  # 2's complement, little endian
 ELFDATA2MSB = 2  # 2's complement, big endian
 
+ET_EXEC = 2  # Executable file
 ET_DYN = 3  # Shared object file
 
 PT_NULL = 0  # Program header table entry unused
@@ -1157,8 +1158,8 @@ class ElfFile:
         new_rpath: Optional[bytes] = None,
         needed_replacements: Optional[Dict[bytes, bytes]] = None,
     ) -> None:
-        if self.ehdr.e_type != ET_DYN:
-            raise ValueError("Not a dynamic file (ET_DYN)")
+        if self.ehdr.e_type not in (ET_EXEC, ET_DYN):
+            raise ValueError("ELF e_type must be ET_EXEC or ET_DYN")
 
         needed_replacements = needed_replacements or {}
 
