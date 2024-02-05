@@ -1,8 +1,10 @@
 diff --git a/src/repairwheel/_vendor/auditwheel/elfutils.py b/src/repairwheel/_vendor/auditwheel/elfutils.py
-index 33527c9..a319350 100644
+index be0261a..b09470f 100644
 --- a/src/repairwheel/_vendor/auditwheel/elfutils.py
 +++ b/src/repairwheel/_vendor/auditwheel/elfutils.py
-@@ -3,5 +3,5 @@
+@@ -1,7 +1,7 @@
+ from __future__ import annotations
+ 
 -import os
 -from os.path import basename, realpath, relpath
 +from os.path import basename
@@ -10,7 +12,12 @@ index 33527c9..a319350 100644
  from typing import Iterator
  
  from elftools.common.exceptions import ELFError
-@@ -131,12 +131,12 @@ def is_subdir(path: str, directory: str) -> bool:
+@@ -126,17 +126,14 @@ def elf_read_rpaths(fn: str) -> dict[str, list[str]]:
+     return result
+ 
+ 
+-def is_subdir(path: str, directory: str) -> bool:
++def is_subdir(path: str | Path | None, directory: str | Path) -> bool:
      if path is None:
          return False
  
@@ -21,9 +28,46 @@ index 33527c9..a319350 100644
  
 -    relative = relpath(path, directory)
 -    if relative.startswith(os.pardir):
-+    if directory not in path.parents:
-         return False
-+
-     return True
+-        return False
+-    return True
++    return directory in path.parents
  
  
+ def get_undefined_symbols(path: str) -> set[str]:
+diff --git a/src/repairwheel/_vendor/auditwheel/repair.py b/src/repairwheel/_vendor/auditwheel/repair.py
+index 68d74ab..a819913 100644
+--- a/src/repairwheel/_vendor/auditwheel/repair.py
++++ b/src/repairwheel/_vendor/auditwheel/repair.py
+@@ -9,6 +9,7 @@ import shutil
+ import stat
+ from os.path import abspath, basename, dirname, exists, isabs
+ from os.path import join as pjoin
++from pathlib import Path
+ from subprocess import check_call
+ from typing import Iterable
+ 
+@@ -237,7 +238,7 @@ def _resolve_rpath_tokens(rpath: str, lib_base_dir: str) -> str:
+ 
+ def _path_is_script(path: str) -> bool:
+     # Looks something like "uWSGI-2.0.21.data/scripts/uwsgi"
+-    components = path.split("/")
++    components = Path(path).parts
+     return (
+         len(components) == 3
+         and components[0].endswith(".data")
+@@ -265,7 +266,7 @@ def _replace_elf_script_with_shim(package_name: str, orig_path: str) -> str:
+     new_path = os.path.join(scripts_dir, os.path.basename(orig_path))
+     os.rename(orig_path, new_path)
+ 
+-    with open(orig_path, "w") as f:
++    with open(orig_path, "w", newline="\n") as f:
+         f.write(_script_shim(new_path))
+     os.chmod(orig_path, os.stat(new_path).st_mode)
+ 
+@@ -286,5 +287,5 @@ if __name__ == "__main__":
+         sys.argv,
+     )
+ """.format(
+-        binary_path=binary_path,
++        binary_path=Path(binary_path).as_posix(),
+     )

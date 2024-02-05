@@ -9,6 +9,7 @@ import shutil
 import stat
 from os.path import abspath, basename, dirname, exists, isabs
 from os.path import join as pjoin
+from pathlib import Path
 from subprocess import check_call
 from typing import Iterable
 
@@ -16,7 +17,7 @@ from repairwheel._vendor.auditwheel.patcher import ElfPatcher
 
 from .elfutils import elf_read_dt_needed, elf_read_rpaths, is_subdir
 from .hashfile import hashfile
-from .policy import get_replace_platforms
+from .policy import WheelPolicies, get_replace_platforms
 from .wheel_abi import get_wheel_elfdata
 from .wheeltools import InWheelCtx, add_platforms
 
@@ -32,16 +33,17 @@ WHEEL_INFO_RE = re.compile(
 
 
 def repair_wheel(
+    wheel_policy: WheelPolicies,
     wheel_path: str,
     abis: list[str],
     lib_sdir: str,
     out_dir: str,
     update_tags: bool,
     patcher: ElfPatcher,
-    exclude: list[str],
+    exclude: frozenset[str],
     strip: bool = False,
 ) -> str | None:
-    external_refs_by_fn = get_wheel_elfdata(wheel_path)[1]
+    external_refs_by_fn = get_wheel_elfdata(wheel_policy, wheel_path, exclude)[1]
 
     # Do not repair a pure wheel, i.e. has no external refs
     if not external_refs_by_fn:
@@ -65,15 +67,13 @@ def repair_wheel(
         if not exists(dest_dir):
             os.mkdir(dest_dir)
 
-        # here, fn is a path to a python extension library in
+        # here, fn is a path to an ELF file (lib or executable) in
         # the wheel, and v['libs'] contains its required libs
         for fn, v in external_refs_by_fn.items():
             ext_libs: dict[str, str] = v[abis[0]]["libs"]
             replacements: list[tuple[str, str]] = []
             for soname, src_path in ext_libs.items():
-                if soname in exclude:
-                    logger.info(f"Excluding {soname}")
-                    continue
+                assert soname not in exclude
 
                 if src_path is None:
                     raise ValueError(
@@ -91,6 +91,9 @@ def repair_wheel(
                 patcher.replace_needed(fn, *replacements)
 
             if len(ext_libs) > 0:
+                if _path_is_script(fn):
+                    fn = _replace_elf_script_with_shim(match.group("name"), fn)
+
                 new_rpath = os.path.relpath(dest_dir, os.path.dirname(fn))
                 new_rpath = os.path.join("$ORIGIN", new_rpath)
                 append_rpath_within_wheel(fn, new_rpath, ctx.name, patcher)
@@ -162,7 +165,7 @@ def copylib(src_path: str, dest_dir: str, patcher: ElfPatcher) -> tuple[str, str
     patcher.set_soname(dest_path, new_soname)
 
     if any(itertools.chain(rpaths["rpaths"], rpaths["runpaths"])):
-        patcher.set_rpath(dest_path, dest_dir)
+        patcher.set_rpath(dest_path, "$ORIGIN")
 
     return new_soname, dest_path
 
@@ -231,3 +234,58 @@ def _resolve_rpath_tokens(rpath: str, lib_base_dir: str) -> str:
         rpath = rpath.replace(f"${token}", target)  # $TOKEN
         rpath = rpath.replace(f"${{{token}}}", target)  # ${TOKEN}
     return rpath
+
+
+def _path_is_script(path: str) -> bool:
+    # Looks something like "uWSGI-2.0.21.data/scripts/uwsgi"
+    components = Path(path).parts
+    return (
+        len(components) == 3
+        and components[0].endswith(".data")
+        and components[1] == "scripts"
+    )
+
+
+def _replace_elf_script_with_shim(package_name: str, orig_path: str) -> str:
+    """Move an ELF script and replace it with a shim.
+
+    We can't directly rewrite the RPATH of ELF executables in the "scripts"
+    directory since scripts aren't installed to a consistent relative path to
+    platlib files.
+
+    Instead, we move the executable into a special directory in platlib and put
+    a shim script in its place which execs the real executable.
+
+    More context: https://github.com/pypa/auditwheel/issues/340
+
+    Returns the new path of the moved executable.
+    """
+    scripts_dir = f"{package_name}.scripts"
+    os.makedirs(scripts_dir, exist_ok=True)
+
+    new_path = os.path.join(scripts_dir, os.path.basename(orig_path))
+    os.rename(orig_path, new_path)
+
+    with open(orig_path, "w", newline="\n") as f:
+        f.write(_script_shim(new_path))
+    os.chmod(orig_path, os.stat(new_path).st_mode)
+
+    return new_path
+
+
+def _script_shim(binary_path: str) -> str:
+    return """\
+#!python
+import os
+import sys
+import sysconfig
+
+
+if __name__ == "__main__":
+    os.execv(
+        os.path.join(sysconfig.get_path("platlib"), {binary_path!r}),
+        sys.argv,
+    )
+""".format(
+        binary_path=Path(binary_path).as_posix(),
+    )

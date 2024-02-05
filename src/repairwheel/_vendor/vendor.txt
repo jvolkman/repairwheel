@@ -1,2 +1,2 @@
-git+https://github.com/pypa/auditwheel.git@1def5d7d3a777946ba1fb6361aec790c67ed710f
+auditwheel==6.0.0
 delocate==0.10.7
