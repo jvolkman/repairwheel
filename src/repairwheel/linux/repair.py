@@ -27,10 +27,11 @@ def repair(wheel_file: Path, output_dir: Path, lib_path: List[Path], verbosity: 
     target_machine = get_machine_from_wheel(wheel_file)
     monkeypatch.apply_auditwheel_patches(target_machine, lib_path)
 
+    from repairwheel._vendor.auditwheel.policy import WheelPolicies
     from repairwheel._vendor.auditwheel.wheel_abi import analyze_wheel_abi, NonPlatformWheel
 
     try:
-        winfo = analyze_wheel_abi(str(wheel_file))
+        winfo = analyze_wheel_abi(WheelPolicies(), str(wheel_file), frozenset())
     except NonPlatformWheel:
         log.info(NonPlatformWheel.LOG_MESSAGE)
         return

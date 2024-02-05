@@ -4,16 +4,14 @@ from typing import Dict, List
 
 
 def init_policies_for_machine(machine: str) -> None:
-    import platform
+    from repairwheel._vendor.auditwheel import policy
+    policies_for_machine = policy.WheelPolicies(
+        libc=policy.Libc.GLIBC,  # TODO: support musl somehow
+        arch=machine,
+    )
 
-    orig_machine_fn = platform.machine
-    try:
-        platform.machine = lambda: machine
-        import repairwheel._vendor.auditwheel.policy
-
-        reload(repairwheel._vendor.auditwheel.policy)
-    finally:
-        platform.machine = orig_machine_fn
+    # Override the WheelPolicies class to always return our policies_for_machine
+    policy.WheelPolicies = lambda: policies_for_machine
 
 
 def patch_load_ld_paths(lib_paths: List[Path]) -> None:
