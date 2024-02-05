@@ -11,7 +11,7 @@ import urllib.request
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 
 SCRIPT_DIR = Path(__file__).parent.resolve()
@@ -34,16 +34,20 @@ class BuildInfo:
     ext_cflags: List[str]
     ext_name: str
     python_url: str
+    app_cflags: Optional[List[str]] = None
+    app_name: Optional[str] = None
 
 
 LINUX_X86_64_BUILD = BuildInfo(
-    target="x86_64-linux",
+    target="x86_64-linux-gnu",
     tag="cp36-abi3-linux_x86_64",
     dep_cflags=["-shared", "-Wl,-soname,libtestdep.so"],
     dep_name="libtestdep.so",
     ext_cflags=["-shared", "-I{pydir}/python/include/python3.10", "-I{testdep}", "-L{lib}", "-ltestdep"],
     ext_name=f"{WHEEL_NAME}.abi3.so",
     python_url="https://github.com/indygreg/python-build-standalone/releases/download/20230116/cpython-3.10.9+20230116-x86_64-unknown-linux-gnu-install_only.tar.gz",
+    app_cflags=["-I{testdep}", "-L{lib}", "-ltestdep"],
+    app_name="testapp",
 )
 
 
@@ -125,6 +129,24 @@ def build_testdep(build_info: BuildInfo, build_dir: Path) -> Path:
     return out_file
 
 
+def build_testapp(build_info: BuildInfo, build_dir: Path, lib_dir: Path) -> Optional[Path]:
+    if not build_info.app_name:
+        return None
+    print(f"Building {build_info.app_name}")
+    fmt = {
+        "lib": str(lib_dir),
+        "testdep": str(SCRIPT_DIR / "testdep"),
+    }
+
+    out_file = build_dir / "testapp" / build_info.app_name
+    out_file.parent.mkdir(parents=True, exist_ok=True)
+    args = ["zig", "cc", "-target", build_info.target, "-o", str(out_file), "testapp.c"]
+    args += [flag.format(**fmt) for flag in (build_info.app_cflags or [])]
+    subprocess.check_call(args, cwd=SCRIPT_DIR / "testapp")
+
+    return out_file
+
+
 def build_ext(build_info: BuildInfo, build_dir: Path, python_dir: Path, lib_dir: Path) -> Path:
     print(f"Building {build_info.ext_name}")
     fmt = {
@@ -164,21 +186,31 @@ def build_record(files: Dict[str, bytes], record_file: str) -> str:
     return "\n".join(records) + "\n"
 
 
-def build_wheel(build_info: BuildInfo, ext_file: Path, out_dir: Path) -> None:
+def build_wheel(build_info: BuildInfo, ext_file: Path, app_file: Optional[Path], out_dir: Path) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     wheel_file = out_dir / f"{WHEEL_NAME}-{WHEEL_VERSION}-{build_info.tag}.whl"
     print(f"Building {wheel_file}")
 
-    with open(ext_file, "rb") as ext_file:
-        ext_bytes = ext_file.read()
+    with open(ext_file, "rb") as ext_f:
+        ext_bytes = ext_f.read()
+
+    app_bytes = None
 
     record_file = f"{WHEEL_NAME}-{WHEEL_VERSION}.dist-info/RECORD"
     files = {
-        f"testwheel/{build_info.ext_name}": ext_bytes,
+        f"{WHEEL_NAME}/{build_info.ext_name}": ext_bytes,
         f"{WHEEL_NAME}-{WHEEL_VERSION}.dist-info/top_level.txt": b"test\n",
         f"{WHEEL_NAME}-{WHEEL_VERSION}.dist-info/METADATA": METADATA.encode("utf-8"),
         f"{WHEEL_NAME}-{WHEEL_VERSION}.dist-info/WHEEL": build_wheel_manifest(build_info).encode("utf-8"),
     }
+    if app_file:
+        with open(app_file, "rb") as app_f:
+            app_bytes = app_f.read()
+        files.update(
+            {
+                f"{WHEEL_NAME}-{WHEEL_VERSION}.data/scripts/app": app_bytes
+            }
+        )
 
     record = build_record(files, record_file)
     files[record_file] = record.encode("utf-8")
@@ -187,7 +219,18 @@ def build_wheel(build_info: BuildInfo, ext_file: Path, out_dir: Path) -> None:
     with zipfile.ZipFile(wheel_file, "w", zipfile.ZIP_DEFLATED) as zip:
         for fname in sorted(files):
             data = files[fname]
-            zip.writestr(fname, data)
+            zinfo = zipfile.ZipInfo(
+                filename=fname,
+                date_time=(1980, 1, 1, 0, 0, 0),
+            )
+            pname = Path(fname)
+            if pname.parent.name == "scripts" and pname.parent.parent.name.endswith(".data"):
+                # Use executable bit for scripts
+                zinfo.external_attr = 0o100775 << 16  # Regular file, executable
+            else:
+                zinfo.external_attr = 0o100664 << 16  # Regular file, not executable
+
+            zip.writestr(zinfo, data)
 
 
 def build(build_info: BuildInfo, build_dir: Path, out_dir: Path):
@@ -197,15 +240,17 @@ def build(build_info: BuildInfo, build_dir: Path, out_dir: Path):
     build_dir.mkdir(parents=True, exist_ok=True)
 
     testdep_file = build_testdep(build_info, build_dir)
+    lib_dir = testdep_file.parent
     out_dir = out_dir / build_info.tag
     out_lib_dir = out_dir / "lib"
     out_lib_dir.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(testdep_file, out_lib_dir / testdep_file.name)
 
     python_dir = fetch_python(build_info, build_dir)
-    ext_file = build_ext(build_info, build_dir, python_dir, testdep_file.parent)
+    ext_file = build_ext(build_info, build_dir, python_dir, lib_dir)
+    app_file = build_testapp(build_info, build_dir, lib_dir)
 
-    build_wheel(build_info, ext_file, out_dir)
+    build_wheel(build_info, ext_file, app_file, out_dir)
 
 
 if __name__ == "__main__":
