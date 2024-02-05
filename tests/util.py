@@ -68,6 +68,15 @@ def _call_new_python(context, *py_args, **kwargs) -> bytes:
     return subprocess.check_output(args, **kwargs)
 
 
+def _has_script(context, script_name: str) -> bool:
+    return (Path(context.env_dir) / "bin" / script_name).is_file()
+
+
+def _exec_script(context, script_name: str) -> bytes:
+    script = Path(context.env_dir) / "bin" / script_name
+    return subprocess.check_output([script])
+
+
 def is_wheel_compatible(wheel: Path) -> bool:
     _, _, _, wheel_tags = parse_wheel_filename(wheel.name)
     for sys_tag in sys_tags():
@@ -87,5 +96,10 @@ def check_wheel_installs_and_runs(wheel: Path) -> None:
         assert answer.strip() == b"42"
         doc = _call_new_python(context, "-c", "from testwheel import testwheel; print(testwheel.__doc__)")
         assert doc.strip() == b"A test wheel."
+
+        # Also test the included binary "script" if it exists.
+        if _has_script(context, "app"):
+            script_output = _exec_script(context, "app")
+            assert script_output.strip() == b"Answer = 42"
 
     return True
