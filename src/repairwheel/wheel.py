@@ -7,7 +7,7 @@ import zipfile
 from datetime import datetime
 from io import StringIO
 from pathlib import Path
-from typing import BinaryIO, List, Optional, Tuple
+from typing import BinaryIO, Dict, List, Optional, Tuple
 from zipfile import ZipFile, ZipInfo
 
 from packaging.utils import canonicalize_name, parse_wheel_filename
@@ -75,6 +75,34 @@ def _copy_and_hash(fsrc: BinaryIO, fdst: BinaryIO) -> Tuple[str, int]:
     )
 
 
+def _gather_original_file_modes(original_wheel: Path) -> Dict[str, int]:
+    dist_name, dist_version, _, _ = parse_wheel_filename(original_wheel.name)
+
+    with ZipFile(original_wheel) as original_wheel_zip:
+        original_modes = {zi.filename: (zi.external_attr >> 16) & 0xFFFF for zi in original_wheel_zip.infolist()}
+
+    # Auditwheel has a feature that patches ELF binary "scripts" with a shim pointing to a patched binary that lives
+    # elsewhere. That patched binary won't have an entry in the original wheel from which to take the file mode, so
+    # we prime one here.
+    additional_modes = {}
+    for filename, mode in original_modes.items():
+        if "/" not in filename:
+            continue
+
+        # The original binary script will be at e.g. testwheel-1.0.data/scripts/myapp
+        dirpath, name = filename.rsplit("/", 1)
+        if dirpath != f"{dist_name}-{dist_version}.data/scripts":
+            continue
+
+        # The auditwheel-patched elf binary will be at testwheel.scripts/myapp
+        patched_elf_path = f"{dist_name}.scripts/{name}"
+        if patched_elf_path not in original_modes:
+            additional_modes[patched_elf_path] = mode
+
+    original_modes.update(additional_modes)
+    return original_modes
+
+
 def write_canonical_wheel(
     original_wheel: Path,
     patched_wheel: Path,
@@ -100,8 +128,7 @@ def write_canonical_wheel(
     dist_name, dist_version, _, _ = parse_wheel_filename(patched_wheel.name)
     dist_name = _dist_normalized_name(dist_name)
 
-    with ZipFile(original_wheel) as original_wheel_zip:
-        original_modes = {zi.filename: (zi.external_attr >> 16) & 0xFFFF for zi in original_wheel_zip.infolist()}
+    original_modes = _gather_original_file_modes(original_wheel)
 
     mtime_args = mtime.timetuple()[:6]
 
