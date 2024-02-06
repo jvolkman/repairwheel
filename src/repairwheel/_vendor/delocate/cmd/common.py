@@ -14,8 +14,8 @@ from typing import Callable, Iterable, Iterator, List
 
 from typing_extensions import Literal, TypedDict
 
-from .. import __version__
-from ..delocating import filter_system_libs
+from repairwheel._vendor.delocate import __version__
+from repairwheel._vendor.delocate.delocating import filter_system_libs
 
 logger = logging.getLogger(__name__)
 

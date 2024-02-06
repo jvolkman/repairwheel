@@ -17,7 +17,8 @@ from typing import Iterable, Optional, Union, overload
 
 from packaging.utils import parse_wheel_filename
 
-from .pkginfo import read_pkg_info, write_pkg_info
+from repairwheel._vendor.delocate.pkginfo import read_pkg_info, write_pkg_info
+
 from .tmpdirs import InTemporaryDirectory
 from .tools import dir2zip, open_rw, unique_by_index, zip2dir
 

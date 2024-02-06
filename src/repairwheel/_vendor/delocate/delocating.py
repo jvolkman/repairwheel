@@ -28,7 +28,9 @@ from typing import (
 )
 
 from .libsana import (
+    DelocationError,
     _allow_all,
+    filter_system_libs,
     get_rp_stripper,
     stripped_lib_dict,
     tree_libs,
@@ -58,6 +60,7 @@ class DelocationError(Exception):
 
 
 def posix_relpath(path: str, start: str = None) -> str:
+    """Return path relative to start using posix separators (/)."""
     rel = relpath(path, start)
     return Path(rel).as_posix()
 
@@ -208,6 +211,7 @@ def _copy_required_libs(
             "Copying library %s to %s", old_path, relpath(new_path, root_path)
         )
         shutil.copy(old_path, new_path)
+        # Make copied file writeable if necessary.
         statinfo = os.stat(new_path)
         if not statinfo.st_mode & stat.S_IWRITE:
             os.chmod(new_path, statinfo.st_mode | stat.S_IWRITE)
@@ -410,12 +414,6 @@ def _dylibs_only(filename: str) -> bool:
     return filename.endswith(".so") or filename.endswith(".dylib")
 
 
-def filter_system_libs(libname: str) -> bool:
-    _, libname = os.path.splitdrive(libname)
-    libname = Path(libname).as_posix()
-    return not (libname.startswith("/usr/lib") or libname.startswith("/System"))
-
-
 def _delocate_filter_function(
     path: str,
     *,
@@ -512,7 +510,7 @@ def delocate_path(
 
 
 def _copy_lib_dict(
-    lib_dict: Mapping[Text, Mapping[Text, Text]]
+    lib_dict: Mapping[Text, Mapping[Text, Text]],
 ) -> Dict[Text, Dict[Text, Text]]:
     """Returns a copy of lib_dict."""
     return {  # Convert nested Mapping types into nested Dict types.

@@ -10,8 +10,8 @@ from argparse import ArgumentParser
 from os.path import abspath, basename, expanduser
 from os.path import join as pjoin
 
-from ..cmd.common import common_parser, verbosity_config
-from ..fuse import fuse_wheels
+from repairwheel._vendor.delocate.cmd.common import common_parser, verbosity_config
+from repairwheel._vendor.delocate.fuse import fuse_wheels
 
 parser = ArgumentParser(description=__doc__, parents=[common_parser])
 parser.add_argument(
