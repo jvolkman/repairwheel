@@ -28,8 +28,11 @@ from typing import (
 )
 
 from .libsana import (
+    DelocationError,
     _allow_all,
+    filter_system_libs,
     get_rp_stripper,
+    is_resolved_subpath,
     stripped_lib_dict,
     tree_libs,
     tree_libs_from_directory,
@@ -53,11 +56,14 @@ logger = logging.getLogger(__name__)
 DLC_PREFIX = "/DLC/"
 
 
-class DelocationError(Exception):
-    pass
-
-
-def posix_relpath(path: str, start: str = None) -> str:
+def posix_relpath(
+    path: Union[str, os.PathLike],
+    start: Union[str, os.PathLike],
+) -> str:
+    """Return path relative to start using posix separators (/)."""
+    # We use os.path.relpath here since Path.relative_to doesn't support
+    # relative sibling paths. E.g., relpath("foo", "bar") == "../foo",
+    # but Path("foo").relative_to(Path("bar")) raises an error.
     rel = relpath(path, start)
     return Path(rel).as_posix()
 
@@ -163,7 +169,7 @@ def _analyze_tree_libs(
             # @rpath, etc, at this point should never happen.
             raise DelocationError("%s was expected to be resolved." % required)
         r_ed_base = basename(required)
-        if Path(rp_root_path) not in Path(required).parents:
+        if not is_resolved_subpath(required, rp_root_path):
             # Not local, plan to copy
             if r_ed_base in copied_basenames:
                 raise DelocationError(
@@ -208,9 +214,11 @@ def _copy_required_libs(
             "Copying library %s to %s", old_path, relpath(new_path, root_path)
         )
         shutil.copy(old_path, new_path)
+        # Make copied file writeable if necessary.
         statinfo = os.stat(new_path)
         if not statinfo.st_mode & stat.S_IWRITE:
             os.chmod(new_path, statinfo.st_mode | stat.S_IWRITE)
+
         # Delocate this file now that it is stored locally.
         needs_delocating.add(new_path)
         # Update out_lib_dict with the new file paths.
@@ -410,12 +418,6 @@ def _dylibs_only(filename: str) -> bool:
     return filename.endswith(".so") or filename.endswith(".dylib")
 
 
-def filter_system_libs(libname: str) -> bool:
-    _, libname = os.path.splitdrive(libname)
-    libname = Path(libname).as_posix()
-    return not (libname.startswith("/usr/lib") or libname.startswith("/System"))
-
-
 def _delocate_filter_function(
     path: str,
     *,
@@ -512,7 +514,7 @@ def delocate_path(
 
 
 def _copy_lib_dict(
-    lib_dict: Mapping[Text, Mapping[Text, Text]]
+    lib_dict: Mapping[Text, Mapping[Text, Text]],
 ) -> Dict[Text, Dict[Text, Text]]:
     """Returns a copy of lib_dict."""
     return {  # Convert nested Mapping types into nested Dict types.

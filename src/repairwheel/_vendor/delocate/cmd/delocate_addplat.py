@@ -21,8 +21,8 @@ from argparse import ArgumentParser
 from os.path import expanduser, realpath
 from os.path import join as exists
 
-from ..cmd.common import common_parser, glob_paths, verbosity_config
-from ..wheeltools import WheelToolsError, add_platforms
+from repairwheel._vendor.delocate.cmd.common import common_parser, glob_paths, verbosity_config
+from repairwheel._vendor.delocate.wheeltools import WheelToolsError, add_platforms
 
 parser = ArgumentParser(description=__doc__, parents=[common_parser])
 parser.add_argument(

@@ -11,8 +11,8 @@ from argparse import ArgumentParser
 from os.path import basename, exists, expanduser
 from os.path import join as pjoin
 
-from .. import patch_wheel
-from ..cmd.common import common_parser, verbosity_config
+from repairwheel._vendor.delocate import patch_wheel
+from repairwheel._vendor.delocate.cmd.common import common_parser, verbosity_config
 
 parser = ArgumentParser(description=__doc__, parents=[common_parser])
 parser.add_argument(

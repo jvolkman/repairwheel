@@ -20,9 +20,8 @@ from typing import (
     Set,
     Text,
     Tuple,
+    Union,
 )
-
-from . import delocating
 
 from .tmpdirs import TemporaryDirectory
 from .tools import (
@@ -35,16 +34,28 @@ from .tools import (
 logger = logging.getLogger(__name__)
 
 
+class DelocationError(Exception):
+    pass
+
+
 class DependencyNotFound(Exception):
     """
     Raised by tree_libs or resolve_rpath if an expected dependency is missing.
     """
 
 
-def _filter_system_libs(libname: Text) -> bool:
-    _, libname = os.path.splitdrive(libname)
-    libname = Path(libname).as_posix()
-    return not (libname.startswith("/usr/lib") or libname.startswith("/System"))
+def is_resolved_subpath(
+    path: Union[str, os.PathLike],
+    base: Union[str, os.PathLike],
+) -> bool:
+    return Path(base).resolve() in Path(path).resolve().parents
+
+
+def filter_system_libs(libname: Union[str, os.PathLike]) -> bool:
+    """Return True if libname starts with /System or /usr/lib."""
+    return not any(
+        is_resolved_subpath(libname, base) for base in ["/usr/lib", "/System"]
+    )
 
 
 def get_dependencies(
@@ -94,7 +105,7 @@ def get_dependencies(
         logger.debug("Ignoring dependencies of %s" % lib_fname)
         return
     if not os.path.isfile(lib_fname):
-        if not _filter_system_libs(lib_fname):
+        if not filter_system_libs(lib_fname):
             logger.debug(
                 "Ignoring missing library %s because it is a system library.",
                 lib_fname,
@@ -114,7 +125,7 @@ def get_dependencies(
             else:
                 dependency_path = search_environment_for_lib(install_name)
             if not os.path.isfile(dependency_path):
-                if not _filter_system_libs(dependency_path):
+                if not filter_system_libs(dependency_path):
                     logger.debug(
                         "Skipped missing dependency %s"
                         " because it is a system library.",
@@ -320,9 +331,7 @@ def _tree_libs_from_libraries(
     if missing_libs and not ignore_missing:
         # get_dependencies will already have logged details of missing
         # libraries.
-        raise delocating.DelocationError(
-            "Could not find all dependencies."
-        )
+        raise DelocationError("Could not find all dependencies.")
 
     return lib_dict
 
@@ -330,7 +339,7 @@ def _tree_libs_from_libraries(
 def tree_libs_from_directory(
     start_path: str,
     *,
-    lib_filt_func: Callable[[str], bool] = _filter_system_libs,
+    lib_filt_func: Callable[[str], bool] = filter_system_libs,
     copy_filt_func: Callable[[str], bool] = lambda path: True,
     executable_path: Optional[str] = None,
     ignore_missing: bool = False,
@@ -757,7 +766,7 @@ def wheel_libs(
         When dependencies can not be located and `ignore_missing` is False.
     """
     if filt_func is None:
-        filt_func = _filter_system_libs
+        filt_func = filter_system_libs
     with TemporaryDirectory() as tmpdir:
         zip2dir(wheel_fname, tmpdir)
         lib_dict = tree_libs_from_directory(
@@ -770,4 +779,4 @@ def _paths_from_var(varname: str, lib_basename: str) -> List[str]:
     var = os.environ.get(varname)
     if var is None:
         return []
-    return [pjoin(path, lib_basename) for path in var.split(":")]
+    return [pjoin(path, lib_basename) for path in var.split(os.pathsep)]
