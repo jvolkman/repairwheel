@@ -9,10 +9,10 @@ from os import getcwd
 from os.path import isdir, realpath
 from os.path import sep as psep
 
-from .. import wheel_libs
-from ..cmd.common import common_parser, glob_paths, verbosity_config
-from ..delocating import filter_system_libs
-from ..libsana import stripped_lib_dict, tree_libs_from_directory
+from repairwheel._vendor.delocate import wheel_libs
+from repairwheel._vendor.delocate.cmd.common import common_parser, glob_paths, verbosity_config
+from repairwheel._vendor.delocate.delocating import filter_system_libs
+from repairwheel._vendor.delocate.libsana import stripped_lib_dict, tree_libs_from_directory
 
 parser = ArgumentParser(description=__doc__, parents=[common_parser])
 parser.add_argument(

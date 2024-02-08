@@ -7,8 +7,8 @@ from __future__ import absolute_import, division, print_function
 import os
 from argparse import ArgumentParser
 
-from .. import delocate_path
-from ..cmd.common import (
+from repairwheel._vendor.delocate import delocate_path
+from repairwheel._vendor.delocate.cmd.common import (
     common_parser,
     delocate_parser,
     delocate_values,

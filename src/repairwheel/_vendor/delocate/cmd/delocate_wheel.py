@@ -12,8 +12,8 @@ from os.path import basename, exists, expanduser
 from os.path import join as pjoin
 from typing import List, Optional, Text
 
-from .. import delocate_wheel
-from ..cmd.common import (
+from repairwheel._vendor.delocate import delocate_wheel
+from repairwheel._vendor.delocate.cmd.common import (
     common_parser,
     delocate_parser,
     delocate_values,

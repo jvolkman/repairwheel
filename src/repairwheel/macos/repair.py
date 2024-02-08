@@ -35,7 +35,7 @@ def repair(wheel: Path, output_path: Path, lib_path: List[Path], verbosity: int 
 
     # Set our path in DYLD_LIBRARY_PATH since that's where delocate looks.
     orig_env = {var: os.environ.get(var) for var in ["DYLD_LIBRARY_PATH", "DYLD_FALLBACK_LIBRARY_PATH"]}
-    os.environ["DYLD_LIBRARY_PATH"] = ":".join(str(p) for p in lib_path)
+    os.environ["DYLD_LIBRARY_PATH"] = os.pathsep.join(str(p) for p in lib_path)
 
     try:
         out_wheel = output_path / wheel.name
