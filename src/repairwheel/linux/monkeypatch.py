@@ -17,12 +17,12 @@ def init_policies_for_machine(machine: str) -> None:
 def patch_load_ld_paths(lib_paths: List[Path]) -> None:
     import repairwheel._vendor.auditwheel.lddtree
 
+    original_load_ld_paths = repairwheel._vendor.auditwheel.lddtree.load_ld_paths
+
     def load_ld_paths(root: str = "/", prefix: str = "") -> Dict[str, List[str]]:
-        return {
-            "env": [str(lp) for lp in lib_paths],
-            "conf": [],
-            "interp": [],
-        }
+        ldpaths = original_load_ld_paths(root, prefix)
+        ldpaths["env"].extend(str(lp) for lp in lib_paths)
+        return ldpaths
 
     repairwheel._vendor.auditwheel.lddtree.load_ld_paths = load_ld_paths
 
