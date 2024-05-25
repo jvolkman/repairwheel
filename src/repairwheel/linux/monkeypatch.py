@@ -14,19 +14,28 @@ def init_policies_for_machine(machine: str) -> None:
     policy.WheelPolicies = lambda: policies_for_machine
 
 
-def patch_load_ld_paths(lib_paths: List[Path]) -> None:
+def patch_load_ld_paths(lib_paths: List[Path], use_sys_paths: bool) -> None:
     import repairwheel._vendor.auditwheel.lddtree
 
-    def load_ld_paths(root: str = "/", prefix: str = "") -> Dict[str, List[str]]:
-        return {
-            "env": [str(lp) for lp in lib_paths],
-            "conf": [],
-            "interp": [],
-        }
+    if use_sys_paths:
+        original_load_ld_paths = repairwheel._vendor.auditwheel.lddtree.load_ld_paths
+
+        def load_ld_paths(root: str = "/", prefix: str = "") -> Dict[str, List[str]]:
+            ldpaths = original_load_ld_paths(root, prefix)
+            # Insert lib_paths at the beginning of the list
+            ldpaths["env"][:0] = [str(lp) for lp in lib_paths]
+            return ldpaths
+    else:
+        def load_ld_paths(root: str = "/", prefix: str = "") -> Dict[str, List[str]]:
+            return {
+                "env": [str(lp) for lp in lib_paths],
+                "conf": [],
+                "interp": [],
+            }
 
     repairwheel._vendor.auditwheel.lddtree.load_ld_paths = load_ld_paths
 
 
-def apply_auditwheel_patches(target_machine: str, lib_paths: List[Path]) -> None:
+def apply_auditwheel_patches(target_machine: str, lib_paths: List[Path], use_sys_paths: bool) -> None:
     init_policies_for_machine(target_machine)
-    patch_load_ld_paths(lib_paths)
+    patch_load_ld_paths(lib_paths, use_sys_paths)
