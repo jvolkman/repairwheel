@@ -9,6 +9,7 @@ from typing import List, NoReturn, Set
 
 from packaging.utils import parse_wheel_filename
 
+from . import __version__
 from .linux.repair import repair as linux_repair
 from .macos.repair import repair as macos_repair
 from .windows.repair import repair as windows_repair
@@ -27,6 +28,7 @@ def make_parser() -> argparse.ArgumentParser:
     parser.add_argument("-o", "--output-dir", type=Path, required=True)
     parser.add_argument("-l", "--lib-dir", type=Path, action="append")
     parser.add_argument("--no-sys-paths", action="store_true", help="do not search libraries in system paths")
+    parser.add_argument("-V", "--version", action="version", version=__version__)
 
     return parser
 

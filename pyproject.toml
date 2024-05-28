@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "repairwheel"
-version = "0.2.9"
+dynamic = ["version"]
 description = "Repair any wheel, anywhere"
 readme = "README.md"
 requires-python = ">= 3.8"
@@ -72,6 +72,9 @@ lines-after-imports = 2
 known-first-party = ["build"]
 
 [tool.hatch]
+
+[tool.hatch.version]
+path="src/repairwheel/__init__.py"
 
 [tool.hatch.build.targets.sdist]
 exclude = [
