@@ -25,7 +25,9 @@ def patch_load_ld_paths(lib_paths: List[Path], use_sys_paths: bool) -> None:
             # Insert lib_paths at the beginning of the list
             ldpaths["env"][:0] = [str(lp) for lp in lib_paths]
             return ldpaths
+
     else:
+
         def load_ld_paths(root: str = "/", prefix: str = "") -> Dict[str, List[str]]:
             return {
                 "env": [str(lp) for lp in lib_paths],

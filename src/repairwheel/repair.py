@@ -26,7 +26,7 @@ def make_parser() -> argparse.ArgumentParser:
     parser.add_argument("wheel", type=Path)
     parser.add_argument("-o", "--output-dir", type=Path, required=True)
     parser.add_argument("-l", "--lib-dir", type=Path, action="append")
-    parser.add_argument('--no-sys-paths', action='store_true', help='do not search libraries in system paths')
+    parser.add_argument("--no-sys-paths", action="store_true", help="do not search libraries in system paths")
 
     return parser
 

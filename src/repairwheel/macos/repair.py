@@ -46,7 +46,6 @@ def repair(wheel: Path, output_path: Path, lib_path: List[Path], use_sys_paths: 
     else:
         os.environ["DYLD_LIBRARY_PATH"] = lib_path_str
 
-
     try:
         out_wheel = output_path / wheel.name
         delocate_wheel(
