@@ -26,6 +26,7 @@ def make_parser() -> argparse.ArgumentParser:
     parser.add_argument("wheel", type=Path)
     parser.add_argument("-o", "--output-dir", type=Path, required=True)
     parser.add_argument("-l", "--lib-dir", type=Path, action="append")
+    parser.add_argument("--no-sys-paths", action="store_true", help="do not search libraries in system paths")
 
     return parser
 
@@ -55,7 +56,7 @@ def find_written_wheel(wheel_dir: Path) -> Path:
     return files[0]
 
 
-def noop_repair(wheel: Path, output_path: Path, _lib_path: List[Path], _verbosity: int = 0) -> None:
+def noop_repair(wheel: Path, output_path: Path, _lib_path: List[Path], _use_sys_paths: bool, _verbosity: int = 0) -> None:
     # Simply copy the input wheel to the output directory.
     copied_location = output_path / wheel.name
     shutil.copyfile(wheel, copied_location)
@@ -77,6 +78,7 @@ def main():
     original_wheel: Path = args.wheel.resolve()
     out_dir: Path = args.output_dir.resolve()
     lib_path: List[Path] = [lp.resolve() for lp in (args.lib_dir or [])]
+    use_sys_paths: bool = not args.no_sys_paths
 
     if not original_wheel.is_file():
         fatal(f"File does not exist: {original_wheel}")
@@ -99,7 +101,7 @@ def main():
 
     with tempfile.TemporaryDirectory(prefix="repairwheel") as temp_wheel_dir:
         temp_wheel_dir = Path(temp_wheel_dir)
-        fn(original_wheel, temp_wheel_dir, lib_path)
+        fn(original_wheel, temp_wheel_dir, lib_path, use_sys_paths)
         patched_wheel = find_written_wheel(temp_wheel_dir)
 
         out_dir.mkdir(parents=True, exist_ok=True)

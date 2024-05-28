@@ -29,13 +29,22 @@ def _patch_tools():
     importlib.reload(repairwheel._vendor.delocate.libsana)
 
 
-def repair(wheel: Path, output_path: Path, lib_path: List[Path], verbosity: int = 0) -> None:
+def repair(wheel: Path, output_path: Path, lib_path: List[Path], use_sys_paths: bool, verbosity: int = 0) -> None:
     _patch_tools()
     from repairwheel._vendor.delocate.delocating import delocate_wheel
 
     # Set our path in DYLD_LIBRARY_PATH since that's where delocate looks.
     orig_env = {var: os.environ.get(var) for var in ["DYLD_LIBRARY_PATH", "DYLD_FALLBACK_LIBRARY_PATH"]}
-    os.environ["DYLD_LIBRARY_PATH"] = os.pathsep.join(str(p) for p in lib_path)
+    lib_path_str = os.pathsep.join(str(p) for p in lib_path)
+    if use_sys_paths:
+        if lib_path_str:
+            if orig_env["DYLD_LIBRARY_PATH"]:
+                new_dyld_lib_path = lib_path_str + os.pathsep + orig_env["DYLD_LIBRARY_PATH"]
+            else:
+                new_dyld_lib_path = lib_path_str
+            os.environ["DYLD_LIBRARY_PATH"] = new_dyld_lib_path
+    else:
+        os.environ["DYLD_LIBRARY_PATH"] = lib_path_str
 
     try:
         out_wheel = output_path / wheel.name

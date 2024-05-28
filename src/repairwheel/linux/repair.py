@@ -23,9 +23,9 @@ def get_machine_from_wheel(wheel: Path) -> str:
     return machine
 
 
-def repair(wheel_file: Path, output_dir: Path, lib_path: List[Path], verbosity: int = 0) -> None:
+def repair(wheel_file: Path, output_dir: Path, lib_path: List[Path], use_sys_paths: bool, verbosity: int = 0) -> None:
     target_machine = get_machine_from_wheel(wheel_file)
-    monkeypatch.apply_auditwheel_patches(target_machine, lib_path)
+    monkeypatch.apply_auditwheel_patches(target_machine, lib_path, use_sys_paths)
 
     from repairwheel._vendor.auditwheel.policy import WheelPolicies
     from repairwheel._vendor.auditwheel.wheel_abi import analyze_wheel_abi, NonPlatformWheel
