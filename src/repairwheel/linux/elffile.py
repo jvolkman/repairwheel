@@ -944,8 +944,19 @@ class ElfFile:
         buf.seek(pos.buf_offset)
         buf_start = buf.tell()
 
+        last_load_segment = self._get_last_load_segment()
+        last_load_pos = -1
+
         phdr_count = len(self.phdrs)
+        if add_new_load:
+            # If we're adding a new PT_LOAD segment, update the header count accordingly.
+            phdr_count += 1
+
         for phdr in self.phdrs:
+            if phdr == last_load_segment:
+                # Remember the position of this header because we might overwrite it.
+                last_load_pos = buf.tell()
+
             phdr = copy.deepcopy(phdr)
             if phdr.p_type == PT_DYNAMIC:
                 phdr.p_offset = dynamic_pos.file_offset
@@ -955,8 +966,6 @@ class ElfFile:
                 phdr.p_memsz = dynamic_pos.length
             elif phdr.p_type == PT_PHDR:
                 phdr_size = sizeof(self._class.Phdr) * phdr_count
-                if add_new_load:
-                    phdr_size += sizeof(self._class.Phdr)
                 phdr.p_offset = phdr_file_offset
                 phdr.p_vaddr = phdr_vm_offset
                 phdr.p_paddr = phdr_vm_offset
@@ -968,23 +977,31 @@ class ElfFile:
         written_len = buf.tell() - buf_start
         pos.add(written_len)
 
-        # We may need to add an additional PT_LOAD for our patches.
+        orig_buf_pos = None
         if add_new_load:
+            # Update our position and length to account for a new PT_LOAD segment.
             pos.add(sizeof(self._class.Phdr))
             written_len += sizeof(self._class.Phdr)
-            phdr_count += 1
+        else:
+            # Else, if we're overwriting an existing PT_LOAD, seek to its position.
+            orig_buf_pos = buf.tell()
+            buf.seek(last_load_pos)
 
-            page_size = self.guess_page_size()
-            self._class.Phdr(
-                p_type=PT_LOAD,
-                p_flags=PF_R | PF_W,
-                p_offset=pos.file_start,
-                p_vaddr=pos.vm_start,
-                p_paddr=pos.vm_start,
-                p_filesz=pos.file_size,
-                p_memsz=pos.vm_size,
-                p_align=page_size,
-            ).to_fileobj(buf)
+        page_size = self.guess_page_size()
+        self._class.Phdr(
+            p_type=PT_LOAD,
+            p_flags=PF_R | PF_W,
+            p_offset=pos.file_start,
+            p_vaddr=pos.vm_start,
+            p_paddr=pos.vm_start,
+            p_filesz=pos.file_size,
+            p_memsz=pos.vm_size,
+            p_align=page_size,
+        ).to_fileobj(buf)
+
+        if orig_buf_pos is not None:
+            # We overwrote the original PT_LOAD, so seek back to where we jumped from above.
+            buf.seek(orig_buf_pos)
 
         return SectionInfo(phdr_file_offset, phdr_vm_offset, written_len, phdr_count)
 
@@ -1133,7 +1150,7 @@ class ElfFile:
             fh.seek(last_load_header.p_offset)
             last_load_data = fh.read(last_load_header.p_filesz)
             read_end = fh.tell()
-            fh.seek(0, 2)
+            fh.seek(0, io.SEEK_END)
             file_end = fh.tell()
 
         # Return false if this isn't the last data in the file
@@ -1162,7 +1179,7 @@ class ElfFile:
 
         needed_replacements = needed_replacements or {}
 
-        self._fh.seek(0, 2)
+        self._fh.seek(0, io.SEEK_END)
         file_end = self._fh.tell()
         page_size = self.guess_page_size()
 
