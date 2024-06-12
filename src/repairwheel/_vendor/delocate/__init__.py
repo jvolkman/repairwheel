@@ -1,4 +1,4 @@
-"""Delocate package."""
+# Init for delocate package
 
 import warnings
 

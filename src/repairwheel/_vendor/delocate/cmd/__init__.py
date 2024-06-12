@@ -1,1 +1,0 @@
-"""Delocate commands package."""

@@ -1,11 +1,11 @@
-"""Routines to copy / relink library dependencies in trees and wheels."""
+""" Routines to copy / relink library dependencies in trees and wheels
+"""
 
-from __future__ import annotations
+from __future__ import division, print_function
 
 import functools
 import logging
 import os
-import re
 import shutil
 import stat
 import warnings
@@ -18,7 +18,6 @@ from typing import (
     Dict,
     FrozenSet,
     Iterable,
-    Iterator,
     List,
     Mapping,
     Optional,
@@ -27,15 +26,6 @@ from typing import (
     Tuple,
     Union,
 )
-
-from macholib.mach_o import (  # type: ignore[import-untyped]
-    CPU_TYPE_NAMES,
-    LC_BUILD_VERSION,
-    LC_VERSION_MIN_MACOSX,
-)
-from macholib.MachO import MachO  # type: ignore[import-untyped]
-from packaging.utils import parse_wheel_filename
-from packaging.version import Version
 
 from .libsana import (
     DelocationError,
@@ -49,7 +39,6 @@ from .libsana import (
 )
 from .tmpdirs import TemporaryDirectory
 from .tools import (
-    _is_macho_file,
     _remove_absolute_rpaths,
     dir2zip,
     find_package_dirs,
@@ -65,8 +54,6 @@ logger = logging.getLogger(__name__)
 
 # Prefix for install_name_id of copied libraries
 DLC_PREFIX = "/DLC/"
-
-_PLATFORM_REGEXP = re.compile(r"macosx_(\d+)_(\d+)_(\w+)")
 
 
 def posix_relpath(
@@ -88,7 +75,7 @@ def delocate_tree_libs(
     *,
     sanitize_rpaths: bool = False,
 ) -> Dict[Text, Dict[Text, Text]]:
-    """Move needed libraries in `lib_dict` into `lib_path`.
+    """Move needed libraries in `lib_dict` into `lib_path`
 
     `lib_dict` has keys naming libraries required by the files in the
     corresponding value.  Call the keys, "required libs".  Call the values
@@ -278,7 +265,7 @@ def copy_recurse(
     copy_filt_func: Optional[Callable[[Text], bool]] = None,
     copied_libs: Optional[Dict[Text, Dict[Text, Text]]] = None,
 ) -> Dict[Text, Dict[Text, Text]]:
-    """Analyze `lib_path` for library dependencies and copy libraries.
+    """Analyze `lib_path` for library dependencies and copy libraries
 
     `lib_path` is a directory containing libraries.  The libraries might
     themselves have dependencies.  This function analyzes the dependencies and
@@ -337,7 +324,7 @@ def _copy_required(
     copy_filt_func: Optional[Callable[[Text], bool]],
     copied_libs: Dict[Text, Dict[Text, Text]],
 ) -> None:
-    """Copy libraries required for files in `lib_path` to `copied_libs`.
+    """Copy libraries required for files in `lib_path` to `copied_libs`
 
     Augment `copied_libs` dictionary with any newly copied libraries, modifying
     `copied_libs` in-place - see Notes.
@@ -437,10 +424,8 @@ def _delocate_filter_function(
     lib_filt_func: Callable[[str], bool],
     copy_filt_func: Callable[[str], bool],
 ) -> bool:
-    """Combine the library inspection and copy filters into one function.
-
-    So that libraries which won't be copied will not be followed.
-    """
+    """Combines the library inspection and copy filters so that libraries
+    which won't be copied will not be followed."""
     return lib_filt_func(path) and copy_filt_func(path)
 
 
@@ -454,7 +439,7 @@ def delocate_path(
     *,
     sanitize_rpaths: bool = False,
 ) -> Dict[Text, Dict[Text, Text]]:
-    """Copy required libraries for files in `tree_path` into `lib_path`.
+    """Copy required libraries for files in `tree_path` into `lib_path`
 
     Parameters
     ----------
@@ -531,7 +516,7 @@ def delocate_path(
 def _copy_lib_dict(
     lib_dict: Mapping[Text, Mapping[Text, Text]],
 ) -> Dict[Text, Dict[Text, Text]]:
-    """Return a copy of lib_dict."""
+    """Returns a copy of lib_dict."""
     return {  # Convert nested Mapping types into nested Dict types.
         required: dict(requiring) for required, requiring in lib_dict.items()
     }
@@ -606,279 +591,6 @@ def _make_install_name_ids_unique(
         validate_signature(lib)
 
 
-def _get_macos_min_version(dylib_path: Path) -> Iterator[tuple[str, Version]]:
-    """Get the minimum macOS version from a dylib file.
-
-    Parameters
-    ----------
-    dylib_path : Path
-        The path to the dylib file.
-
-    Yields
-    ------
-    str
-        The CPU type.
-    Version
-        The minimum macOS version.
-    """
-    if not _is_macho_file(dylib_path):
-        return
-    for header in MachO(dylib_path).headers:
-        for cmd in header.commands:
-            if cmd[0].cmd == LC_BUILD_VERSION:
-                version = cmd[1].minos
-            elif cmd[0].cmd == LC_VERSION_MIN_MACOSX:
-                version = cmd[1].version
-            else:
-                continue
-            yield (
-                CPU_TYPE_NAMES.get(header.header.cputype, "unknown"),
-                Version(f"{version >> 16 & 0xFF}.{version >> 8 & 0xFF}"),
-            )
-            break
-
-
-def _get_archs_and_version_from_wheel_name(
-    wheel_name: str,
-) -> dict[str, Version]:
-    """Get the architecture and minimum macOS version from the wheel name.
-
-    Parameters
-    ----------
-    wheel_name : str
-        The name of the wheel.
-
-    Returns
-    -------
-    Dict[str, Version]
-        A dictionary containing the architecture and minimum macOS version
-        for each architecture in the wheel name.
-    """
-    platform_tag_set = parse_wheel_filename(wheel_name)[-1]
-    platform_requirements = {}
-    for platform_tag in platform_tag_set:
-        match = _PLATFORM_REGEXP.match(platform_tag.platform)
-        if match is None:
-            raise ValueError(f"Invalid platform tag: {platform_tag.platform}")
-        major, minor, arch = match.groups()
-        platform_requirements[arch] = Version(f"{major}.{minor}")
-    return platform_requirements
-
-
-def _get_problematic_libs(
-    required_version: Optional[Version],
-    version_lib_dict: Dict[Version, List[Path]],
-    arch: str,
-) -> set[tuple[Path, Version]]:
-    """Find libraries which require a more modern macOS version.
-
-    Parameters
-    ----------
-    required_version : Version or None
-        The expected minimum macOS version.
-        If None, return an empty set.
-    version_lib_dict : Dict[Version, List[Path]]
-        A dictionary containing mapping from minimum macOS version to libraries
-        that require that version.
-    arch : str
-        The architecture of the libraries. For proper handle arm64 case
-
-    Returns
-    -------
-    set[tuple[Path, Version]]
-        A set of libraries that require a more modern macOS version than the
-        provided one.
-    """
-    if required_version is None:
-        return set()
-    if arch == "arm64" and required_version < Version("11.0"):
-        # All arm64 libraries require macOS at least 11.0,
-        # So even if user provide lower deployment target,
-        # for example, by setting environment variable
-        # MACOSX_DEPLOYMENT_TARGET=10.15
-        # the binaries still will be compatible with 11.0+ only.
-        # So there is no need to check for compatible with older macOS versions
-        required_version = Version("11.0")
-    bad_libraries: set[tuple[Path, Version]] = set()
-    for library_version, libraries in version_lib_dict.items():
-        if library_version > required_version:
-            bad_libraries.update((path, library_version) for path in libraries)
-    return bad_libraries
-
-
-def _calculate_minimum_wheel_name(
-    wheel_name: str,
-    wheel_dir: Path,
-    require_target_macos_version: Optional[Version],
-) -> tuple[str, set[tuple[Path, Version]]]:
-    """Return a wheel name with an updated platform tag.
-
-    Based on the architecture of the libraries in the wheel and actual platform
-    tag.
-
-    Parameters
-    ----------
-    wheel_name : str
-        The name of the wheel.
-    wheel_dir : Path
-        The directory of the unpacked wheel.
-    require_target_macos_version : Version or None
-        The target macOS version that the wheel should be compatible with.
-
-    Returns
-    -------
-    str
-        The updated wheel name.
-    set[tuple[Path, Version]]
-        A set of libraries that require a more modern macOS version than the
-        provided one.
-    """
-    # get platform tag from wheel name using packaging
-    if wheel_name.endswith("any.whl"):
-        # universal wheel, no need to update the platform tag
-        return wheel_name, set()
-    arch_version = _get_archs_and_version_from_wheel_name(wheel_name)
-    # get the architecture and minimum macOS version from the libraries
-    # in the wheel
-    version_info_dict: Dict[str, Dict[Version, List[Path]]] = {}
-
-    for lib in wheel_dir.glob("**/*"):
-        for arch, version in _get_macos_min_version(lib):
-            version_info_dict.setdefault(arch.lower(), {}).setdefault(
-                version, []
-            ).append(lib)
-    version_dkt = {
-        arch: max(version) for arch, version in version_info_dict.items()
-    }
-
-    problematic_libs: set[tuple[Path, Version]] = set()
-
-    try:
-        for arch, version in list(arch_version.items()):
-            if arch == "universal2":
-                if version_dkt["arm64"] == Version("11.0"):
-                    arch_version["universal2"] = max(
-                        version, version_dkt["x86_64"]
-                    )
-                else:
-                    arch_version["universal2"] = max(
-                        version, version_dkt["arm64"], version_dkt["x86_64"]
-                    )
-                    problematic_libs.update(
-                        _get_problematic_libs(
-                            require_target_macos_version,
-                            version_info_dict["arm64"],
-                            "arm64",
-                        )
-                    )
-                problematic_libs.update(
-                    _get_problematic_libs(
-                        require_target_macos_version,
-                        version_info_dict["x86_64"],
-                        "x86_64",
-                    )
-                )
-            elif arch == "universal":
-                arch_version["universal"] = max(
-                    version, version_dkt["i386"], version_dkt["x86_64"]
-                )
-                problematic_libs.update(
-                    _get_problematic_libs(
-                        require_target_macos_version,
-                        version_info_dict["i386"],
-                        "i386",
-                    ),
-                    _get_problematic_libs(
-                        require_target_macos_version,
-                        version_info_dict["x86_64"],
-                        "x86_64",
-                    ),
-                )
-            else:
-                arch_version[arch] = max(version, version_dkt[arch])
-                problematic_libs.update(
-                    _get_problematic_libs(
-                        require_target_macos_version,
-                        version_info_dict[arch],
-                        arch,
-                    )
-                )
-    except KeyError as e:
-        raise DelocationError(
-            f"Failed to find any binary with the required architecture: {e}"
-        ) from e
-    prefix = wheel_name.rsplit("-", 1)[0]
-    platform_tag = ".".join(
-        f"macosx_{version.major}_{version.minor}_{arch}"
-        for arch, version in arch_version.items()
-    )
-    return f"{prefix}-{platform_tag}.whl", problematic_libs
-
-
-def _check_and_update_wheel_name(
-    wheel_path: Path,
-    wheel_dir: Path,
-    require_target_macos_version: Optional[Version],
-) -> Path:
-    """Determine the minimum platform tag and update the wheel name if needed.
-
-    Based on current wheel name and binary files in the wheel.
-
-    Parameters
-    ----------
-    wheel_path : Path
-        The path to the wheel.
-    wheel_dir : Path
-        The directory of the unpacked wheel.
-    require_target_macos_version : Version or None
-        The target macOS version that the wheel should be compatible with.
-        If provided and the wheel does not satisfy the target MacOS version,
-        raise an error.
-    """
-    wheel_name = os.path.basename(wheel_path)
-
-    new_name, problematic_files = _calculate_minimum_wheel_name(
-        wheel_name, Path(wheel_dir), require_target_macos_version
-    )
-    if problematic_files:
-        problematic_files_str = "\n".join(
-            f"{lib_path} has a minimum target of {lib_macos_version}"
-            for lib_path, lib_macos_version in problematic_files
-        )
-        raise DelocationError(
-            "Library dependencies do not satisfy target MacOS"
-            f" version {require_target_macos_version}:\n"
-            f"{problematic_files_str}"
-        )
-    if new_name != wheel_name:
-        wheel_path = wheel_path.parent / new_name
-    return wheel_path
-
-
-def _update_wheelfile(wheel_dir: Path, wheel_name: str) -> None:
-    """
-    Update the WHEEL file in the wheel directory with the new platform tag.
-
-    Parameters
-    ----------
-    wheel_dir : Path
-        The directory of the unpacked wheel.
-    wheel_name : str
-        The name of the wheel.
-        Used for determining the new platform tag.
-    """
-    platform_tag_set = parse_wheel_filename(wheel_name)[-1]
-    (file_path,) = wheel_dir.glob("*.dist-info/WHEEL")
-    with file_path.open(encoding="utf-8") as f:
-        lines = f.readlines()
-    with file_path.open("w", encoding="utf-8", newline="\n") as f:
-        for line in lines:
-            if line.startswith("Tag:"):
-                f.write(f"Tag: {'.'.join(str(x) for x in platform_tag_set)}\n")
-            else:
-                f.write(line)
-
-
 def delocate_wheel(
     in_wheel: str,
     out_wheel: Optional[str] = None,
@@ -891,9 +603,8 @@ def delocate_wheel(
     executable_path: Optional[str] = None,
     ignore_missing: bool = False,
     sanitize_rpaths: bool = False,
-    require_target_macos_version: Optional[Version] = None,
 ) -> Dict[str, Dict[str, str]]:
-    """Update wheel by copying required libraries to `lib_sdir` in wheel.
+    """Update wheel by copying required libraries to `lib_sdir` in wheel
 
     Create `lib_sdir` in wheel tree only if we are copying one or more
     libraries.
@@ -939,8 +650,6 @@ def delocate_wheel(
         Continue even if missing dependencies are detected.
     sanitize_rpaths : bool, default=False, keyword-only
         If True, absolute paths in rpaths of binaries are removed.
-    require_target_macos_version : None or Version, optional, keyword-only
-        If provided, the minimum macOS version that the wheel should support.
 
     Returns
     -------
@@ -966,7 +675,6 @@ def delocate_wheel(
     else:
         out_wheel = abspath(out_wheel)
     in_place = in_wheel == out_wheel
-    remove_old = in_place
     with TemporaryDirectory() as tmpdir:
         wheel_dir = realpath(pjoin(tmpdir, "wheel"))
         zip2dir(in_wheel, wheel_dir)
@@ -1009,25 +717,15 @@ def delocate_wheel(
             install_id_prefix=DLC_PREFIX + posix_relpath(lib_sdir, wheel_dir),
         )
         rewrite_record(wheel_dir)
-        out_wheel_ = Path(out_wheel)
-        out_wheel_fixed = _check_and_update_wheel_name(
-            out_wheel_, Path(wheel_dir), require_target_macos_version
-        )
-        if out_wheel_fixed != out_wheel_:
-            out_wheel_ = out_wheel_fixed
-            in_place = False
-            _update_wheelfile(Path(wheel_dir), out_wheel_.name)
         if len(copied_libs) or not in_place:
-            if remove_old:
-                os.remove(in_wheel)
-            dir2zip(wheel_dir, out_wheel_)
+            dir2zip(wheel_dir, out_wheel)
     return stripped_lib_dict(copied_libs, wheel_dir + os.path.sep)
 
 
 def patch_wheel(
     in_wheel: Text, patch_fname: Text, out_wheel: Optional[Text] = None
 ) -> None:
-    """Apply ``-p1`` style patch in `patch_fname` to contents of `in_wheel`.
+    """Apply ``-p1`` style patch in `patch_fname` to contents of `in_wheel`
 
     If `out_wheel` is None (the default), overwrite the wheel `in_wheel`
     in-place.
@@ -1072,7 +770,7 @@ def check_archs(
 ) -> Set[
     Union[Tuple[Text, FrozenSet[Text]], Tuple[Text, Text, FrozenSet[Text]]]
 ]:
-    """Check compatibility of archs in `copied_libs` dict.
+    """Check compatibility of archs in `copied_libs` dict
 
     Parameters
     ----------
@@ -1136,7 +834,7 @@ def check_archs(
 
 
 def bads_report(bads, path_prefix=None):
-    """Return a nice report of bad architectures in `bads`.
+    """Return a nice report of bad architectures in `bads`
 
     Parameters
     ----------
