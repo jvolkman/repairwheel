@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Copy, relink library dependencies for libraries in path."""
-
+""" Copy, relink library dependencies for libraries in path
+"""
 # vim: ft=python
 from __future__ import absolute_import, division, print_function
 
@@ -36,7 +36,7 @@ parser.add_argument(
 )
 
 
-def main() -> None:  # noqa: D103
+def main() -> None:
     args = parser.parse_args()
     verbosity_config(args)
     paths = list(glob_paths(args.paths))

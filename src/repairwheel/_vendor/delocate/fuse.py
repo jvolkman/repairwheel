@@ -1,4 +1,4 @@
-"""Utilities to fuse trees and wheels.
+""" Utilities to fuse trees and wheels
 
 To "fuse" is to merge two binary libraries of different architectures - see
 func:`delocate.tools.lipo_fuse`.
@@ -11,6 +11,7 @@ with the same relative path in ``to_tree``]. In this case the two files are
 "fused" - meaning we use ``lipo_fuse`` to merge the architectures in the two
 libraries.
 """
+
 
 import os
 import shutil
@@ -40,7 +41,7 @@ def _copyfile(in_fname, out_fname):
 
 
 def fuse_trees(to_tree, from_tree, lib_exts=(".so", ".dylib", ".a")):
-    """Fuse path `from_tree` into path `to_tree`.
+    """Fuse path `from_tree` into path `to_tree`
 
     For each file in `from_tree` - check for library file extension (in
     `lib_exts` - if present, check if there is a file with matching relative
@@ -49,7 +50,7 @@ def fuse_trees(to_tree, from_tree, lib_exts=(".so", ".dylib", ".a")):
     conditions are not met, just copy the file from `from_tree` to `to_tree`.
 
     Parameters
-    ----------
+    ---------
     to_tree : str
         path of tree to fuse into (update into)
     from_tree : str
@@ -84,10 +85,10 @@ def fuse_trees(to_tree, from_tree, lib_exts=(".so", ".dylib", ".a")):
 
 
 def fuse_wheels(to_wheel, from_wheel, out_wheel):
-    """Fuse `from_wheel` into `to_wheel`, write to `out_wheel`.
+    """Fuse `from_wheel` into `to_wheel`, write to `out_wheel`
 
     Parameters
-    ----------
+    ---------
     to_wheel : str
         filename of wheel to fuse into
     from_wheel : str

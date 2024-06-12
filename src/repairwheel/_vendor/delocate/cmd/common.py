@@ -1,8 +1,7 @@
-"""Code shared among multiple commands.
+""" Code shared among multiple commands.
 
 All functions in this module are private.
 """
-
 from __future__ import annotations
 
 import glob
@@ -95,10 +94,11 @@ class DelocateArgs(TypedDict):
 
 def delocate_values(args: Namespace) -> DelocateArgs:
     """Return the common kwargs for delocate_path and delocate_wheel."""
+
     exclude_files: List[str] = args.exclude
 
     def copy_filter_exclude(name: str) -> bool:
-        """Return False if name is excluded, uses normal rules otherwise."""
+        """Returns False if name is excluded, uses normal rules otherwise."""
         for exclude_str in exclude_files:
             if exclude_str in name:
                 logger.info(

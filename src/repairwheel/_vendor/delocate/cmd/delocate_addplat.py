@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Add platform tags to wheel filename(s) and WHEEL file in wheel.
+""" Add platform tags to wheel filename(s) and WHEEL file in wheel
 
 Example:
 
@@ -13,7 +13,6 @@ or (adds tags for OSX 10.9 and 10.10):
 
     delocate-addplat -x 10_9 -x 10_10 *.whl
 """
-
 # vim: ft=python
 from __future__ import absolute_import, division, print_function
 
@@ -92,7 +91,7 @@ parser.add_argument(
 )
 
 
-def main() -> None:  # noqa: D103
+def main() -> None:
     args = parser.parse_args()
     verbosity_config(args)
     wheels = list(glob_paths(args.wheels))
