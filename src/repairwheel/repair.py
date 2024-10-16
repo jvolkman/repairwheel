@@ -6,6 +6,7 @@ import sys
 import tempfile
 from pathlib import Path
 from typing import List, NoReturn, Set
+import glob
 
 from packaging.utils import parse_wheel_filename
 
@@ -24,7 +25,7 @@ def fatal(message: str) -> NoReturn:
 def make_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
 
-    parser.add_argument("wheel", type=Path)
+    parser.add_argument("wheels", nargs="+", help="wheel file(s) to repair, supports glob patterns)")
     parser.add_argument("-o", "--output-dir", type=Path, required=True)
     parser.add_argument("-l", "--lib-dir", type=Path, action="append")
     parser.add_argument("--no-sys-paths", action="store_true", help="do not search libraries in system paths")
@@ -77,39 +78,48 @@ def main():
     else:
         mtime = None
 
-    original_wheel: Path = args.wheel.resolve()
     out_dir: Path = args.output_dir.resolve()
     lib_path: List[Path] = [lp.resolve() for lp in (args.lib_dir or [])]
     use_sys_paths: bool = not args.no_sys_paths
 
-    if not original_wheel.is_file():
-        fatal(f"File does not exist: {original_wheel}")
+    wheel_files = []
+    for wheel_pattern in args.wheels:
+        wheel_files.extend(glob.glob(wheel_pattern))
 
-    platforms = get_wheel_platforms(original_wheel)
-    if not platforms:
-        fatal(f"No platforms detected in wheel name: {original_wheel.name}")
+    if not wheel_files:
+        fatal("No wheel files found matching the provided patterns.")
 
-    if len(platforms) > 1:
-        fatal(f"Multiple platforms detected in wheel name ({','.join(platforms)}); not sure what to do")
+    for original_wheel in wheel_files:
+        original_wheel = Path(original_wheel).resolve()
+        if not original_wheel.is_file():
+            fatal(f"File does not exist: {original_wheel}")
 
-    platform = platforms.pop()
+        platforms = get_wheel_platforms(original_wheel)
+        if not platforms:
+            fatal(f"No platforms detected in wheel name: {original_wheel.name}")
 
-    fn = {
-        "linux": linux_repair,
-        "macos": macos_repair,
-        "windows": windows_repair,
-        "any": noop_repair,
-    }[platform]
+        if len(platforms) > 1:
+            fatal(f"Multiple platforms detected in wheel name ({','.join(platforms)}); not sure what to do")
 
-    with tempfile.TemporaryDirectory(prefix="repairwheel") as temp_wheel_dir:
-        temp_wheel_dir = Path(temp_wheel_dir)
-        fn(original_wheel, temp_wheel_dir, lib_path, use_sys_paths)
-        patched_wheel = find_written_wheel(temp_wheel_dir)
+        platform = platforms.pop()
 
-        out_dir.mkdir(parents=True, exist_ok=True)
-        out_wheel = write_canonical_wheel(original_wheel, patched_wheel, out_dir, mtime=mtime)
+        fn = {
+            "linux": linux_repair,
+            "macos": macos_repair,
+            "windows": windows_repair,
+            "any": noop_repair,
+        }[platform]
 
-    print("Wrote", out_wheel)
+        with tempfile.TemporaryDirectory(prefix="repairwheel") as temp_wheel_dir:
+            temp_wheel_dir = Path(temp_wheel_dir)
+            fn(original_wheel, temp_wheel_dir, lib_path, use_sys_paths)
+            patched_wheel = find_written_wheel(temp_wheel_dir)
+
+            out_dir.mkdir(parents=True, exist_ok=True)
+            out_wheel = write_canonical_wheel(original_wheel, patched_wheel, out_dir, mtime=mtime)
+
+        print("Wrote", out_wheel)
+    print("All wheels repaired. Output directory:", out_dir)
 
 
 if __name__ == "__main__":
