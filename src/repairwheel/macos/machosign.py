@@ -47,6 +47,7 @@ from ..fileutil import round_to_multiple
 LOG = logging.getLogger(__name__)
 
 CODE_DIRECTORY_PAGE_SIZE = 4096  # Seems to be what Apple always uses
+SEGMENT_PAGE_SIZE = 16384  # ARM64 is 16384. AMD64 is actually 4096, but 16384 should work too.
 SHA256_HASH_SIZE = 32
 
 CSMAGIC_REQUIREMENT = 0xFADE0C00  # single Requirement blob
@@ -484,6 +485,8 @@ def _ad_hoc_sign(filename: str, fh: BinaryIO) -> None:
         for load, cmd, _ in header.commands:
             if load.cmd in (LC_SEGMENT, LC_SEGMENT_64) and cmd.segname.rstrip(b"\0") == b"__LINKEDIT":
                 cmd.filesize = arch.new_linkedit_size
+                if cmd.filesize > cmd.vmsize:
+                    cmd.vmsize = round_to_multiple(cmd.filesize, SEGMENT_PAGE_SIZE)
                 break
 
         if arch.signature_command_index:
