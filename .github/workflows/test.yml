@@ -72,7 +72,7 @@ jobs:
           TESTWHEEL_GENERATE_PATH: ${{ runner.temp }}/testwheel-out/${{ matrix.python-version }}/${{ matrix.os }}
         run: hatch run test:generate
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: patched-testwheel-${{ matrix.os }}-${{ matrix.python-version }}
           path: ${{ runner.temp }}/testwheel-out
