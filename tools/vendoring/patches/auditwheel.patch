@@ -1,0 +1,34 @@
+diff --git a/src/repairwheel/_vendor/auditwheel/repair.py b/src/repairwheel/_vendor/auditwheel/repair.py
+index afea3e8..b5c21e8 100644
+--- a/src/repairwheel/_vendor/auditwheel/repair.py
++++ b/src/repairwheel/_vendor/auditwheel/repair.py
+@@ -139,7 +139,7 @@ def repair_wheel(
+         if sbom_data:
+             sbom_dir = Path(dist_info_dirs[0], "sboms")
+             sbom_dir.mkdir(exist_ok=True)
+-            (sbom_dir / "auditwheel.cdx.json").write_text(json.dumps(sbom_data))
++            (sbom_dir / "repairwheel.cdx.json").write_text(json.dumps(sbom_data))
+ 
+     return output_wheel
+ 
+diff --git a/src/repairwheel/_vendor/auditwheel/sboms.py b/src/repairwheel/_vendor/auditwheel/sboms.py
+index 59346ad..6e257d5 100644
+--- a/src/repairwheel/_vendor/auditwheel/sboms.py
++++ b/src/repairwheel/_vendor/auditwheel/sboms.py
+@@ -2,7 +2,6 @@ from __future__ import annotations
+ 
+ import hashlib
+ import typing
+-from importlib import metadata
+ from typing import TYPE_CHECKING
+ from urllib.parse import quote
+ 
+@@ -59,7 +58,7 @@ def create_sbom_for_wheel(
+         "metadata": {
+             "component": sbom_components[0],
+             "tools": [
+-                {"name": "auditwheel", "version": metadata.version("auditwheel")},
++                {"name": "repairwheel", "version": __import__("repairwheel").__version__},
+             ],
+         },
+         # These are mutated below through the variables.

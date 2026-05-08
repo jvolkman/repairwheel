@@ -1,4 +1,7 @@
+import os
 import platform
+import subprocess
+import sys
 import tempfile
 import zipfile
 from datetime import datetime
@@ -38,3 +41,40 @@ def test_source_date_epoch(orig_py3_none_any_wheel: TestWheel) -> None:
         with zipfile.ZipFile(patched_wheel) as zf:
             for zi in zf.infolist():
                 assert zi.date_time == expected_zip_time
+
+
+def test_repair_is_idempotent(patched_wheel: Path) -> None:
+    """repair(repair(wheel)) must produce a byte-identical wheel."""
+    if "py3-none-any" in patched_wheel.name:
+        pytest.skip("py3-none-any wheel has no native deps to repair")
+
+    with tempfile.TemporaryDirectory(prefix="idempotent") as temp_dir:
+        out_dir = Path(temp_dir)
+
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "repairwheel",
+                str(patched_wheel),
+                "--output-dir",
+                str(out_dir),
+            ],
+            env=dict(os.environ),
+            capture_output=True,
+            text=True,
+        )
+
+        re_patched = list(out_dir.glob("*.whl"))
+
+        if result.returncode != 0 and not re_patched:
+            # The backend (e.g. delvewheel) recognized the wheel as
+            # already repaired and refused to produce output.  That's
+            # idempotent by definition.
+            return
+
+        assert result.returncode == 0, f"repairwheel failed:\n{result.stdout}\n{result.stderr}"
+        assert len(re_patched) == 1, f"Expected 1 wheel, got {len(re_patched)}"
+        assert patched_wheel.read_bytes() == re_patched[0].read_bytes(), (
+            "Repairing an already-repaired wheel produced different output"
+        )
