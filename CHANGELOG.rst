@@ -1,9 +1,0 @@
-+++++++++
-Changelog
-+++++++++
-
-
-Unreleased
-==========
-
-- Foo
