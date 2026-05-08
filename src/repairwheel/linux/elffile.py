@@ -1008,10 +1008,12 @@ class ElfFile:
         new_soname: bytes | None = None,
         new_rpath: bytes | None = None,
         needed_replacements: dict[bytes, bytes] | None = None,
+        needed_removals: set[bytes] | None = None,
         add_new_load: bool = False,
         place_phdrs_at_start_of_section: bool = False,
     ) -> tuple[SectionInfo, SectionInfo]:
         needed_replacements = needed_replacements or {}
+        needed_removals = needed_removals or set()
         cur_needed_names = []
         cur_rpath = b""
         cur_runpath = b""
@@ -1039,8 +1041,8 @@ class ElfFile:
         new_rpath = new_rpath or cur_rpath
 
         # Update our DT_NEEDED and DT_VERNEED lists
-        new_needed_names = [needed_replacements.get(e, e) for e in cur_needed_names]
-        new_verneed_names = [needed_replacements.get(e, e) for e in cur_verneed_names]
+        new_needed_names = [needed_replacements.get(e, e) for e in cur_needed_names if e not in needed_removals]
+        new_verneed_names = [needed_replacements.get(e, e) for e in cur_verneed_names if e not in needed_removals]
 
         # Next we need to figure out if we can replace the end of .dynstr.
         # We expect .dynstr to end with a substring starting with $PATCH$\0,
@@ -1168,11 +1170,13 @@ class ElfFile:
         new_soname: bytes | None = None,
         new_rpath: bytes | None = None,
         needed_replacements: dict[bytes, bytes] | None = None,
+        needed_removals: set[bytes] | None = None,
     ) -> None:
         if self.ehdr.e_type not in (ET_EXEC, ET_DYN):
             raise ValueError("ELF e_type must be ET_EXEC or ET_DYN")
 
         needed_replacements = needed_replacements or {}
+        needed_removals = needed_removals or set()
 
         self._fh.seek(0, io.SEEK_END)
         file_end = self._fh.tell()
@@ -1201,6 +1205,7 @@ class ElfFile:
             new_soname=new_soname,
             new_rpath=new_rpath,
             needed_replacements=needed_replacements,
+            needed_removals=needed_removals,
             add_new_load=add_new_load,
         )
 

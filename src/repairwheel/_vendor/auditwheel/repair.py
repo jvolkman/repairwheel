@@ -139,7 +139,7 @@ def repair_wheel(
         if sbom_data:
             sbom_dir = Path(dist_info_dirs[0], "sboms")
             sbom_dir.mkdir(exist_ok=True)
-            (sbom_dir / "auditwheel.cdx.json").write_text(json.dumps(sbom_data))
+            (sbom_dir / "repairwheel.cdx.json").write_text(json.dumps(sbom_data))
 
     return output_wheel
 

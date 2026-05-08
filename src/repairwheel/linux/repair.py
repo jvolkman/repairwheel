@@ -17,9 +17,20 @@ def get_machine_from_wheel(wheel: Path) -> str:
     if len(tags) > 1:
         log.warning("Wheel %s has multiple tags; using first (%s)", wheel.name, first_tag)
 
-    # platform is like 'linux_x86_64' or 'manylinux_aarch64'
-    _, machine = first_tag.platform.split("_", 1)
-    return machine
+    # platform is like 'linux_x86_64', 'manylinux_2_5_x86_64',
+    # 'manylinux2014_aarch64', etc.  We can't simply split on '_'
+    # because manylinux tags embed a version number.  Instead, try
+    # each known architecture as a suffix.
+    from repairwheel._vendor.auditwheel.architecture import Architecture
+
+    plat = first_tag.platform
+    for arch in Architecture:
+        suffix = f"_{arch.value}"
+        if plat.endswith(suffix):
+            return arch.value
+
+    # Fallback: assume the architecture is the part after the last '_'.
+    return plat.rsplit("_", 1)[-1]
 
 
 def repair(wheel_file: Path, output_dir: Path, lib_path: list[Path], use_sys_paths: bool, verbosity: int = 0) -> None:

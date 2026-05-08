@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import typing
-from importlib import metadata
 from typing import TYPE_CHECKING
 from urllib.parse import quote
 
@@ -59,7 +58,7 @@ def create_sbom_for_wheel(
         "metadata": {
             "component": sbom_components[0],
             "tools": [
-                {"name": "auditwheel", "version": metadata.version("auditwheel")},
+                {"name": "repairwheel", "version": __import__("repairwheel").__version__},
             ],
         },
         # These are mutated below through the variables.

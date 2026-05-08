@@ -9,6 +9,12 @@ class RepairWheelElfPatcher:
             ef = ElfFile(f)
             ef.rewrite(needed_replacements=replacements)
 
+    def remove_needed(self, file_name: str, *sonames: str) -> None:
+        removals = {s.encode("utf-8") for s in sonames}
+        with open(file_name, "r+b") as f:
+            ef = ElfFile(f)
+            ef.rewrite(needed_removals=removals)
+
     def set_soname(self, file_name: str, new_so_name: str) -> None:
         with open(file_name, "r+b") as f:
             ef = ElfFile(f)
