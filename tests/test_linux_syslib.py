@@ -306,9 +306,9 @@ class TestSyslibRepair:
         out2.mkdir()
         repaired2 = _run_repairwheel(repaired_wheel, syslib_env["lib_dir"], out2)
 
-        assert repaired_wheel.read_bytes() == repaired2.read_bytes(), (
-            "Repairing an already-repaired wheel produced different output"
-        )
+        assert (
+            repaired_wheel.read_bytes() == repaired2.read_bytes()
+        ), "Repairing an already-repaired wheel produced different output"
 
     def test_libpython_is_stripped(self, repaired_wheel: Path):
         """The repaired extension must NOT have a DT_NEEDED on libpython.
@@ -514,9 +514,9 @@ class TestSbomEndToEnd:
 
         sbom_entries = [n for n in names if n.endswith(".cdx.json")]
         assert sbom_entries, f"No SBOM found in wheel; files: {names}"
-        assert all("repairwheel.cdx.json" in n for n in sbom_entries), (
-            f"SBOM filename should be repairwheel.cdx.json, got: {sbom_entries}"
-        )
+        assert all(
+            "repairwheel.cdx.json" in n for n in sbom_entries
+        ), f"SBOM filename should be repairwheel.cdx.json, got: {sbom_entries}"
         assert not any("auditwheel.cdx.json" in n for n in names), "auditwheel.cdx.json should not exist in the wheel"
 
     def test_sbom_content_is_branded_repairwheel(self, repaired_bz2_wheel: Path):

@@ -75,6 +75,6 @@ def test_repair_is_idempotent(patched_wheel: Path) -> None:
 
         assert result.returncode == 0, f"repairwheel failed:\n{result.stdout}\n{result.stderr}"
         assert len(re_patched) == 1, f"Expected 1 wheel, got {len(re_patched)}"
-        assert patched_wheel.read_bytes() == re_patched[0].read_bytes(), (
-            "Repairing an already-repaired wheel produced different output"
-        )
+        assert (
+            patched_wheel.read_bytes() == re_patched[0].read_bytes()
+        ), "Repairing an already-repaired wheel produced different output"
