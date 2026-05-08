@@ -1,11 +1,14 @@
-""" Contexts for *with* statement providing temporary directories
-"""
+"""Contexts for *with* statement providing temporary directories"""
 
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from tempfile import TemporaryDirectory
-from types import TracebackType
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import TracebackType
 
 
 class InTemporaryDirectory:
@@ -13,29 +16,32 @@ class InTemporaryDirectory:
 
     Examples
     --------
-    >>> import os
-    >>> my_cwd = os.getcwd()
+    >>> from pathlib import Path
+    >>> my_cwd = Path.cwd()
     >>> with InTemporaryDirectory() as tmpdir:
     ...     _ = open('test.txt', 'wt').write('some text')
     ...     assert os.path.isfile('test.txt')
-    ...     assert os.path.isfile(os.path.join(tmpdir, 'test.txt'))
-    >>> os.path.exists(tmpdir)
+    ...     assert tmpdir.joinpath('test.txt').is_file()
+    >>> tmpdir.exists()
     False
-    >>> os.getcwd() == my_cwd
+    >>> Path.cwd() == my_cwd
     True
+
     """
 
     def __init__(self) -> None:
         self._tmpdir = TemporaryDirectory()
+        self._name = Path(self._tmpdir.name).resolve(strict=True)
 
     @property
-    def name(self) -> str:
-        return self._tmpdir.name
+    def name(self) -> Path:
+        return self._name
 
-    def __enter__(self) -> str:
-        self._pwd = os.getcwd()
-        os.chdir(self._tmpdir.name)
-        return self._tmpdir.__enter__()
+    def __enter__(self) -> Path:
+        self._pwd = Path.cwd()
+        os.chdir(self._name)
+        self._tmpdir.__enter__()
+        return self._name
 
     def __exit__(
         self,
@@ -44,7 +50,7 @@ class InTemporaryDirectory:
         tb: TracebackType | None,
     ) -> None:
         os.chdir(self._pwd)
-        return self._tmpdir.__exit__(exc, value, tb)
+        self._tmpdir.__exit__(exc, value, tb)
 
 
 class InGivenDirectory:
@@ -71,23 +77,24 @@ class InGivenDirectory:
     again.
     """
 
-    def __init__(self, path: str | None = None) -> None:
+    def __init__(self, path: Path | None = None) -> None:
         """Initialize directory context manager
 
         Parameters
         ----------
-        path : None or str, optional
+        path : None or Path, optional
             path to change directory to, for duration of ``with`` block.
-            Defaults to ``os.getcwd()`` if None
+            Defaults to ``Path.cwd()`` if None
+
         """
         if path is None:
-            path = os.getcwd()
-        self.name = os.path.abspath(path)
+            path = Path.cwd()
+        self.name = path.absolute()
 
-    def __enter__(self) -> str:
-        self._pwd = os.path.abspath(os.getcwd())
-        if not os.path.isdir(self.name):
-            os.mkdir(self.name)
+    def __enter__(self) -> Path:
+        self._pwd = Path.cwd()
+        if not self.name.is_dir():
+            self.name.mkdir()
         os.chdir(self.name)
         return self.name
 

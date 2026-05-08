@@ -5,10 +5,7 @@ import math
 import os.path
 import sys
 from typing import BinaryIO
-from typing import Iterable
-from typing import List
-from typing import Optional
-from typing import Union
+from collections.abc import Iterable
 from macholib.MachO import MachO
 from macholib.MachO import MachOHeader
 from macholib.mach_o import FAT_MAGIC
@@ -312,7 +309,7 @@ class SuperBlob:
 @dataclasses.dataclass
 class FatInfo:
     header: fat_header
-    archs: List[Union[fat_arch, fat_arch64]]
+    archs: list[fat_arch | fat_arch64]
 
 
 @dataclasses.dataclass
@@ -329,7 +326,7 @@ class ArchInfo:
     new_offset: int = 0
     new_size: int = 0
     new_linkedit_size: int = 0
-    signature_command_index: Optional[int] = None
+    signature_command_index: int | None = None
     super_blob: SuperBlob = None
     code_signature_offset: int = None
     code_signature_size: int = None
@@ -343,7 +340,7 @@ def _load_fat(fh: BinaryIO) -> FatInfo:
     elif info.header.magic == FAT_MAGIC_64:
         info.archs = [fat_arch64.from_fileobj(fh) for _ in range(info.header.fat.nfat_arch)]
     else:
-        raise ValueError("Unknown fat header magic: %r" % (info.header.magic))
+        raise ValueError(f"Unknown fat header magic: {info.header.magic!r}")
 
     return info
 
@@ -462,7 +459,7 @@ def _ad_hoc_sign(filename: str, fh: BinaryIO) -> None:
             fzero(fh, start, end - start)
 
         # Update the fat structures
-        for arch, fat_info_arch in zip(arch_infos, fat_info.archs):
+        for arch, fat_info_arch in zip(arch_infos, fat_info.archs, strict=False):
             fat_info_arch.offset = arch.new_offset
             fat_info_arch.size = arch.new_size
 
@@ -478,7 +475,7 @@ def _ad_hoc_sign(filename: str, fh: BinaryIO) -> None:
     # Now with the fat structure possibly changed, we reload our mach headers.
     macho = MachO(filename)
 
-    for arch, header in zip(arch_infos, macho.headers):
+    for arch, header in zip(arch_infos, macho.headers, strict=False):
         if not arch.signature_needed:
             continue
 

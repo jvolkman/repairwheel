@@ -2,10 +2,9 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-from typing import List
 
 
-def repair(wheel: Path, output_path: Path, lib_path: List[Path], use_sys_paths: bool, verbosity: int = 0) -> None:
+def repair(wheel: Path, output_path: Path, lib_path: list[Path], use_sys_paths: bool, verbosity: int = 0) -> None:
     orig_env_path = os.environ["PATH"]
     if not use_sys_paths:
         os.environ["PATH"] = ""

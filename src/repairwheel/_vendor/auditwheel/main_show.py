@@ -1,16 +1,33 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
-from repairwheel._vendor.auditwheel.policy import WheelPolicies
+if TYPE_CHECKING:
+    import argparse
 
 logger = logging.getLogger(__name__)
 
 
-def configure_parser(sub_parsers):
-    help = "Audit a wheel for external shared library dependencies."
-    p = sub_parsers.add_parser("show", help=help, description=help)
-    p.add_argument("WHEEL_FILE", help="Path to wheel file.")
+def configure_parser(sub_parsers: Any) -> None:  # noqa: ANN401
+    help_ = "Audit a wheel for external shared library dependencies."
+    p = sub_parsers.add_parser("show", help=help_, description=help_)
+    p.add_argument("WHEEL_FILE", type=Path, help="Path to wheel file.")
+    p.add_argument(
+        "--disable-isa-ext-check",
+        dest="DISABLE_ISA_EXT_CHECK",
+        action="store_true",
+        help="Do not check for extended ISA compatibility (e.g. x86_64_v2)",
+        default=False,
+    )
+    p.add_argument(
+        "--allow-pure-python-wheel",
+        dest="ALLOW_PURE_PY_WHEEL",
+        action="store_true",
+        help="Allow processing of pure Python wheels (no platform-specific binaries) without error",
+        default=False,
+    )
     p.set_defaults(func=execute)
 
 
@@ -21,111 +38,125 @@ def printp(text: str) -> None:
     print("\n".join(wrap(text, break_long_words=False, break_on_hyphens=False)))
 
 
-def execute(args, p):
-    import json
-    from os.path import basename, isfile
+def execute(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
+    from repairwheel._vendor.auditwheel import json
+    from repairwheel._vendor.auditwheel.error import NonPlatformWheelError, WheelToolsError
+    from repairwheel._vendor.auditwheel.wheel_abi import analyze_wheel_abi
+    from repairwheel._vendor.auditwheel.wheeltools import get_wheel_architecture, get_wheel_libc
 
-    from .wheel_abi import NonPlatformWheel, analyze_wheel_abi
+    wheel_file: Path = args.WHEEL_FILE
+    fn = wheel_file.name
 
-    wheel_policy = WheelPolicies()
+    if not wheel_file.is_file():
+        parser.error(f"cannot access {wheel_file}. No such file")
 
-    fn = basename(args.WHEEL_FILE)
-
-    if not isfile(args.WHEEL_FILE):
-        p.error("cannot access %s. No such file" % args.WHEEL_FILE)
+    fn = wheel_file.name
+    is_pure_python = False
+    try:
+        arch = get_wheel_architecture(fn)
+    except (WheelToolsError, NonPlatformWheelError) as e:
+        logger.warning("The architecture could not be deduced from the wheel filename")
+        is_pure_python = isinstance(e, NonPlatformWheelError)
+        arch = None
 
     try:
-        winfo = analyze_wheel_abi(wheel_policy, args.WHEEL_FILE, frozenset())
-    except NonPlatformWheel:
-        logger.info(NonPlatformWheel.LOG_MESSAGE)
+        libc = get_wheel_libc(fn)
+    except WheelToolsError:
+        logger.debug("The libc could not be deduced from the wheel filename")
+        libc = None
+
+    try:
+        winfo = analyze_wheel_abi(
+            libc,
+            arch,
+            wheel_file,
+            frozenset(),
+            disable_isa_ext_check=args.DISABLE_ISA_EXT_CHECK,
+            allow_graft=False,
+        )
+    except NonPlatformWheelError as e:
+        logger.info("%s", e.message)
+        if is_pure_python and args.ALLOW_PURE_PY_WHEEL:
+            return 0
         return 1
 
-    libs_with_versions = [
-        f"{k} with versions {v}" for k, v in winfo.versioned_symbols.items()
-    ]
+    policies = winfo.policies
+
+    libs_with_versions = [f"{k} with versions {v}" for k, v in winfo.versioned_symbols.items()]
 
     printp(
-        '%s is consistent with the following platform tag: "%s".'
-        % (fn, winfo.overall_tag)
+        f'{fn} is consistent with the following platform tag: "{winfo.overall_policy.name}".',
     )
 
-    if (
-        wheel_policy.get_priority_by_name(winfo.pyfpe_tag)
-        < wheel_policy.priority_highest
-    ):
+    if winfo.pyfpe_policy == policies.linux:
         printp(
             "This wheel uses the PyFPE_jbuf function, which is not compatible with the"
-            " manylinux1 tag. (see https://www.python.org/dev/peps/pep-0513/"
-            "#fpectl-builds-vs-no-fpectl-builds)"
+            " manylinux/musllinux tags. (see https://www.python.org/dev/peps/pep-0513/"
+            "#fpectl-builds-vs-no-fpectl-builds)",
         )
         if args.verbose < 1:
-            return
+            return 0
 
-    if wheel_policy.get_priority_by_name(winfo.ucs_tag) < wheel_policy.priority_highest:
+    if winfo.ucs_policy == policies.linux:
         printp(
             "This wheel is compiled against a narrow unicode (UCS2) "
             "version of Python, which is not compatible with the "
-            "manylinux1 tag."
+            "manylinux/musllinux tags.",
         )
         if args.verbose < 1:
-            return
+            return 0
+
+    if winfo.machine_policy == policies.linux:
+        printp("This wheel depends on unsupported ISA extensions.")
+        if args.verbose < 1:
+            return 0
 
     if len(libs_with_versions) == 0:
         printp(
             "The wheel references no external versioned symbols from "
-            "system-provided shared libraries."
+            "system-provided shared libraries.",
         )
     else:
         printp(
             "The wheel references external versioned symbols in these "
-            "system-provided shared libraries: %s" % ", ".join(libs_with_versions)
+            f"system-provided shared libraries: {', '.join(libs_with_versions)}",
         )
 
-    if wheel_policy.get_priority_by_name(winfo.sym_tag) < wheel_policy.priority_highest:
+    if winfo.sym_policy < policies.highest:
         printp(
-            (
-                'This constrains the platform tag to "%s". '
-                "In order to achieve a more compatible tag, you would "
-                "need to recompile a new wheel from source on a system "
-                "with earlier versions of these libraries, such as "
-                "a recent manylinux image."
-            )
-            % winfo.sym_tag
+            f'This constrains the platform tag to "{winfo.sym_policy.name}". '
+            "In order to achieve a more compatible tag, you would "
+            "need to recompile a new wheel from source on a system "
+            "with earlier versions of these libraries, such as "
+            "a recent manylinux image.",
         )
         if args.verbose < 1:
-            return
+            return 0
 
-    libs = winfo.external_refs[
-        wheel_policy.get_policy_name(wheel_policy.priority_lowest)
-    ]["libs"]
+    libs = winfo.external_refs[policies.lowest.name].libs
     if len(libs) == 0:
         printp("The wheel requires no external shared libraries! :)")
     else:
-        printp("The following external shared libraries are required " "by the wheel:")
-        print(json.dumps(dict(sorted(libs.items())), indent=4))
+        printp("The following external shared libraries are required by the wheel:")
+        print(json.dumps(dict(sorted(libs.items()))))
 
-    for p in sorted(wheel_policy.policies, key=lambda p: p["priority"]):
-        if p["priority"] > wheel_policy.get_priority_by_name(winfo.overall_tag):
-            libs = winfo.external_refs[p["name"]]["libs"]
+    for p in policies:
+        if p > winfo.overall_policy:
+            libs = winfo.external_refs[p.name].libs
             if len(libs):
                 printp(
-                    (
-                        'In order to achieve the tag platform tag "%s" '
-                        "the following shared library dependencies "
-                        "will need to be eliminated:"
-                    )
-                    % p["name"]
+                    f"In order to achieve the tag platform tag {p.name!r} "
+                    "the following shared library dependencies "
+                    "will need to be eliminated:",
                 )
                 printp(", ".join(sorted(libs.keys())))
-            blacklist = winfo.external_refs[p["name"]]["blacklist"]
+            blacklist = winfo.external_refs[p.name].blacklist
             if len(blacklist):
                 printp(
-                    (
-                        'In order to achieve the tag platform tag "%s" '
-                        "the following black-listed symbol dependencies "
-                        "will need to be eliminated:"
-                    )
-                    % p["name"]
+                    f"In order to achieve the tag platform tag {p.name!r} "
+                    "the following black-listed symbol dependencies "
+                    "will need to be eliminated:",
                 )
                 for key in sorted(blacklist.keys()):
                     printp(f"From {key}: " + ", ".join(sorted(blacklist[key])))
+    return 0

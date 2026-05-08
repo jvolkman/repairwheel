@@ -1,7 +1,6 @@
-import argparse
 import logging
+import zlib
 from pathlib import Path
-from typing import List
 
 from packaging.utils import parse_wheel_filename
 
@@ -23,46 +22,57 @@ def get_machine_from_wheel(wheel: Path) -> str:
     return machine
 
 
-def repair(wheel_file: Path, output_dir: Path, lib_path: List[Path], use_sys_paths: bool, verbosity: int = 0) -> None:
+def repair(wheel_file: Path, output_dir: Path, lib_path: list[Path], use_sys_paths: bool, verbosity: int = 0) -> None:
     target_machine = get_machine_from_wheel(wheel_file)
-    monkeypatch.apply_auditwheel_patches(target_machine, lib_path, use_sys_paths)
+    monkeypatch.patch_load_ld_paths(lib_path, use_sys_paths)
 
-    from repairwheel._vendor.auditwheel.policy import WheelPolicies
-    from repairwheel._vendor.auditwheel.wheel_abi import analyze_wheel_abi, NonPlatformWheel
+    from repairwheel._vendor.auditwheel.architecture import Architecture
+    from repairwheel._vendor.auditwheel.error import NonPlatformWheelError
+    from repairwheel._vendor.auditwheel.libc import Libc
+    from repairwheel._vendor.auditwheel.repair import repair_wheel
+    from repairwheel._vendor.auditwheel.wheel_abi import analyze_wheel_abi
+
+    arch = Architecture(target_machine)
 
     try:
-        winfo = analyze_wheel_abi(WheelPolicies(), str(wheel_file), frozenset())
-    except NonPlatformWheel:
-        log.info(NonPlatformWheel.LOG_MESSAGE)
+        winfo = analyze_wheel_abi(
+            Libc.GLIBC,
+            arch,
+            wheel_file,
+            frozenset(),
+            disable_isa_ext_check=False,
+            allow_graft=True,
+        )
+    except NonPlatformWheelError as e:
+        log.info(e.message)
         return
 
-    show_parser = argparse.ArgumentParser()
-    show_sub_parsers = show_parser.add_subparsers(metavar="command", dest="cmd")
+    policies = winfo.policies
+    if winfo.overall_policy == policies.linux:
+        target_policy = policies.lowest
+    else:
+        target_policy = winfo.overall_policy
 
-    repair_parser = argparse.ArgumentParser()
-    repair_sub_parsers = repair_parser.add_subparsers(metavar="command", dest="cmd")
+    abis = [target_policy.name, *target_policy.aliases]
 
-    from repairwheel._vendor.auditwheel import main_repair, main_show
-
-    main_repair.Patchelf = patcher.RepairWheelElfPatcher
-
-    main_show.configure_parser(show_sub_parsers)
-    main_repair.configure_parser(repair_sub_parsers)
-
-    show_args = show_parser.parse_args(["show", str(wheel_file)])
-    show_args.verbose = verbosity
-    show_args.func(show_args, show_parser)
-
-    repair_args = repair_parser.parse_args(
-        [
-            "repair",
-            str(wheel_file),
-            "--only-plat",
-            "--plat",
-            winfo.sym_tag,
-            "--wheel-dir",
-            str(output_dir),
-        ]
+    log.info(
+        'Wheel "%s" is consistent with policy "%s". Repairing to "%s".',
+        wheel_file.name,
+        winfo.overall_policy.name,
+        target_policy.name,
     )
-    repair_args.verbose = verbosity
-    repair_args.func(repair_args, repair_parser)
+
+    out_wheel = repair_wheel(
+        winfo,
+        wheel_file,
+        abis=abis,
+        lib_sdir=".libs",
+        out_dir=output_dir,
+        update_tags=True,
+        patcher=patcher.RepairWheelElfPatcher(),
+        strip=False,
+        zip_compression_level=zlib.Z_DEFAULT_COMPRESSION,
+    )
+
+    if out_wheel is not None:
+        log.info("Fixed-up wheel written to %s", out_wheel)

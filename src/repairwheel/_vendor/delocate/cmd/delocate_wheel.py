@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-""" Copy, relink library dependencies for wheel
+"""Copy, relink library dependencies for wheel.
 
-Overwrites the wheel in-place by default
+Overwrites the wheel in-place by default.
 """
+
 # vim: ft=python
 from __future__ import annotations
 
@@ -11,6 +12,8 @@ from argparse import ArgumentParser
 from os.path import basename, exists, expanduser
 from os.path import join as pjoin
 from typing import List, Optional, Text
+
+from packaging.version import Version
 
 from repairwheel._vendor.delocate import delocate_wheel
 from repairwheel._vendor.delocate.cmd.common import (
@@ -61,9 +64,15 @@ parser.add_argument(
     " (from 'intel', 'i386', 'x86_64', 'i386,x86_64', 'universal2',"
     " 'x86_64,arm64')",
 )
+parser.add_argument(
+    "--require-target-macos-version",
+    type=Version,
+    help="Verify if platform tag in wheel name is proper",
+    default=None,
+)
 
 
-def main() -> None:
+def main() -> None:  # noqa: D103
     args = parser.parse_args()
     verbosity_config(args)
     wheels = list(glob_paths(args.wheels))
@@ -82,6 +91,15 @@ def main() -> None:
     else:
         require_archs = args.require_archs
 
+    require_target_macos_version = args.require_target_macos_version
+    if (
+        require_target_macos_version is None
+        and "MACOSX_DEPLOYMENT_TARGET" in os.environ
+    ):
+        require_target_macos_version = Version(
+            os.environ["MACOSX_DEPLOYMENT_TARGET"]
+        )
+
     for wheel in wheels:
         if multi or args.verbose:
             print("Fixing: " + wheel)
@@ -94,6 +112,7 @@ def main() -> None:
             out_wheel,
             lib_sdir=args.lib_sdir,
             require_archs=require_archs,
+            require_target_macos_version=require_target_macos_version,
             **delocate_values(args),
         )
         if args.verbose and len(copied):

@@ -5,7 +5,7 @@ import shutil
 import sys
 import tempfile
 from pathlib import Path
-from typing import List, NoReturn, Set
+from typing import NoReturn
 import glob
 
 from packaging.utils import parse_wheel_filename
@@ -34,7 +34,7 @@ def make_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def get_wheel_platforms(wheel: Path) -> Set[str]:
+def get_wheel_platforms(wheel: Path) -> set[str]:
     result = set()
     _, _, _, tags = parse_wheel_filename(wheel.name)
     for tag in tags:
@@ -59,7 +59,7 @@ def find_written_wheel(wheel_dir: Path) -> Path:
     return files[0]
 
 
-def noop_repair(wheel: Path, output_path: Path, _lib_path: List[Path], _use_sys_paths: bool, _verbosity: int = 0) -> None:
+def noop_repair(wheel: Path, output_path: Path, _lib_path: list[Path], _use_sys_paths: bool, _verbosity: int = 0) -> None:
     # Simply copy the input wheel to the output directory.
     copied_location = output_path / wheel.name
     shutil.copyfile(wheel, copied_location)
@@ -79,7 +79,7 @@ def main():
         mtime = None
 
     out_dir: Path = args.output_dir.resolve()
-    lib_path: List[Path] = [lp.resolve() for lp in (args.lib_dir or [])]
+    lib_path: list[Path] = [lp.resolve() for lp in (args.lib_dir or [])]
     use_sys_paths: bool = not args.no_sys_paths
 
     wheel_files = []

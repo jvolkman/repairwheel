@@ -3,13 +3,7 @@ import copy
 from dataclasses import dataclass
 import io
 from typing import BinaryIO
-from typing import Dict
-from typing import Generator
-from typing import List
-from typing import Optional
-from typing import Set
-from typing import Tuple
-from typing import Union
+from collections.abc import Generator
 
 from macholib.ptypes import Structure
 from macholib.ptypes import p_int32
@@ -404,13 +398,13 @@ class Elf64_Vernaux_LE(Structure):
     _fields_ = _Elf64_Vernaux_fields
 
 
-Elf_Ehdr = Union[Elf32_Ehdr_BE, Elf32_Ehdr_LE, Elf64_Ehdr_BE, Elf64_Ehdr_LE]
-Elf_Phdr = Union[Elf32_Phdr_BE, Elf32_Phdr_LE, Elf64_Phdr_BE, Elf64_Phdr_LE]
-Elf_Shdr = Union[Elf32_Shdr_BE, Elf32_Shdr_LE, Elf64_Shdr_BE, Elf64_Shdr_LE]
-Elf_Dyn = Union[Elf32_Dyn_BE, Elf32_Dyn_LE, Elf64_Dyn_BE, Elf64_Dyn_LE]
-Elf_Sym = Union[Elf32_Sym_BE, Elf32_Sym_LE, Elf64_Sym_BE, Elf64_Sym_LE]
-Elf_Verneed = Union[Elf32_Verneed_BE, Elf32_Verneed_LE, Elf64_Verneed_BE, Elf64_Verneed_LE]
-Elf_Vernaux = Union[Elf32_Vernaux_BE, Elf32_Vernaux_LE, Elf64_Vernaux_BE, Elf64_Vernaux_LE]
+Elf_Ehdr = Elf32_Ehdr_BE | Elf32_Ehdr_LE | Elf64_Ehdr_BE | Elf64_Ehdr_LE
+Elf_Phdr = Elf32_Phdr_BE | Elf32_Phdr_LE | Elf64_Phdr_BE | Elf64_Phdr_LE
+Elf_Shdr = Elf32_Shdr_BE | Elf32_Shdr_LE | Elf64_Shdr_BE | Elf64_Shdr_LE
+Elf_Dyn = Elf32_Dyn_BE | Elf32_Dyn_LE | Elf64_Dyn_BE | Elf64_Dyn_LE
+Elf_Sym = Elf32_Sym_BE | Elf32_Sym_LE | Elf64_Sym_BE | Elf64_Sym_LE
+Elf_Verneed = Elf32_Verneed_BE | Elf32_Verneed_LE | Elf64_Verneed_BE | Elf64_Verneed_LE
+Elf_Vernaux = Elf32_Vernaux_BE | Elf32_Vernaux_LE | Elf64_Vernaux_BE | Elf64_Vernaux_LE
 
 
 @dataclass
@@ -473,9 +467,9 @@ ELF64_CLASS_LE = ElfClass(
 @dataclass
 class VerneedEntry:
     verneed: Elf_Verneed
-    vernaux: List[Elf_Vernaux]
+    vernaux: list[Elf_Vernaux]
     verneed_name: bytes
-    vernaux_names: List[bytes]
+    vernaux_names: list[bytes]
 
 
 @dataclass
@@ -483,7 +477,7 @@ class SectionInfo:
     file_offset: int
     vm_offset: int
     length: int
-    count: Optional[int] = None
+    count: int | None = None
 
 
 class PositionTracker:
@@ -533,8 +527,8 @@ class Dynstr:
     strtab: bytes
     soname_pos: int
     rpath_pos: int
-    needed_pos: Dict[bytes, int]
-    vernaux_pos: Dict[bytes, int]
+    needed_pos: dict[bytes, int]
+    vernaux_pos: dict[bytes, int]
 
 
 class ElfFile:
@@ -591,7 +585,7 @@ class ElfFile:
             return self._class.Ehdr.from_fileobj(fh)
 
     @cached_property
-    def phdrs(self) -> List[Elf_Phdr]:
+    def phdrs(self) -> list[Elf_Phdr]:
         h = self.ehdr
         # Sanity check header size
         if h.e_phentsize != sizeof(self._class.Phdr):
@@ -611,7 +605,7 @@ class ElfFile:
         return result
 
     @cached_property
-    def shdrs(self) -> List[Elf_Shdr]:
+    def shdrs(self) -> list[Elf_Shdr]:
         h = self.ehdr
 
         # Sanity check header size
@@ -641,7 +635,7 @@ class ElfFile:
         return result
 
     @cached_property
-    def shdr_names(self) -> List[bytes]:
+    def shdr_names(self) -> list[bytes]:
         ehdr = self.ehdr
         shdrs = self.shdrs
         strtab_off = shdrs[ehdr.e_shstrndx].sh_offset
@@ -655,7 +649,7 @@ class ElfFile:
         return result
 
     @cached_property
-    def dyn(self) -> List[Elf_Dyn]:
+    def dyn(self) -> list[Elf_Dyn]:
         for shdr in self.shdrs:
             if shdr.sh_type == SHT_DYNAMIC:
                 dyn_pos = shdr.sh_offset
@@ -697,7 +691,7 @@ class ElfFile:
         return dynstr
 
     @cached_property
-    def verneed_entries(self) -> List[VerneedEntry]:
+    def verneed_entries(self) -> list[VerneedEntry]:
         verneed_num = None
         for d in self.dyn:
             if d.d_tag == DT_VERNEEDNUM:
@@ -738,14 +732,14 @@ class ElfFile:
         return result
 
     @cached_property
-    def rpath(self) -> Optional[str]:
+    def rpath(self) -> str | None:
         for d in self.dyn:
             if d.d_tag == DT_RPATH:
                 return get_strtab_entry(self.dynstr, d.d_ptr_or_val)
         return None
 
     @cached_property
-    def runpath(self) -> Optional[bytes]:
+    def runpath(self) -> bytes | None:
         for d in self.dyn:
             if d.d_tag == DT_RUNPATH:
                 return get_strtab_entry(self.dynstr, d.d_ptr_or_val)
@@ -772,7 +766,7 @@ class ElfFile:
         return dynstr_pos
 
     def _write_verneed(
-        self, buf: BinaryIO, pos: PositionTracker, dynstr: Dynstr, needed_replacements: Dict[bytes, bytes]
+        self, buf: BinaryIO, pos: PositionTracker, dynstr: Dynstr, needed_replacements: dict[bytes, bytes]
     ) -> SectionInfo:
         shdr_verneed = self.get_shdr(b".gnu.version_r")
         pos.round(shdr_verneed.sh_addralign)
@@ -796,7 +790,7 @@ class ElfFile:
                 vn_struct.vn_next = 0
             vn_struct.to_fileobj(buf)
 
-            for vna_index, (vna_struct, vna_name) in enumerate(zip(vn.vernaux, vn.vernaux_names)):
+            for vna_index, (vna_struct, vna_name) in enumerate(zip(vn.vernaux, vn.vernaux_names, strict=False)):
                 vna_struct = copy.deepcopy(vna_struct)
                 vna_struct.vna_name = dynstr.vernaux_pos[vna_name]
                 if vna_index < len(vn.vernaux) - 1:
@@ -817,9 +811,9 @@ class ElfFile:
         dynstr: Dynstr,
         soname: bytes,
         rpath: bytes,
-        needed: List[bytes],
+        needed: list[bytes],
         dynstr_pos: SectionInfo,
-        verneed_pos: Optional[SectionInfo],
+        verneed_pos: SectionInfo | None,
     ) -> SectionInfo:
         shdr_dynamic = self.get_shdr(b".dynamic")
         pos.round(shdr_dynamic.sh_addralign)
@@ -901,7 +895,7 @@ class ElfFile:
         pos: PositionTracker,
         dynstr_pos: SectionInfo,
         dynamic_pos: SectionInfo,
-        verneed_pos: Optional[SectionInfo],
+        verneed_pos: SectionInfo | None,
     ) -> SectionInfo:
         pos.round(self._class.alignment)
         shdr_file_offset = pos.file_offset
@@ -912,7 +906,7 @@ class ElfFile:
 
         dynstr_index = self.shdr_names.index(b".dynstr")  # We'll use this for sh_link in .dynamic and .gnu.version_r
 
-        for shdr, shdr_name in zip(self.shdrs, self.shdr_names):
+        for shdr, shdr_name in zip(self.shdrs, self.shdr_names, strict=False):
             shdr = copy.deepcopy(shdr)
             if shdr_name == b".dynstr":
                 shdr.sh_addr = dynstr_pos.vm_offset
@@ -1011,12 +1005,12 @@ class ElfFile:
         buf: BinaryIO,
         file_offset: int,
         vm_offset: int,
-        new_soname: Optional[bytes] = None,
-        new_rpath: Optional[bytes] = None,
-        needed_replacements: Optional[Dict[bytes, bytes]] = None,
+        new_soname: bytes | None = None,
+        new_rpath: bytes | None = None,
+        needed_replacements: dict[bytes, bytes] | None = None,
         add_new_load: bool = False,
         place_phdrs_at_start_of_section: bool = False,
-    ) -> Tuple[SectionInfo, SectionInfo]:
+    ) -> tuple[SectionInfo, SectionInfo]:
         needed_replacements = needed_replacements or {}
         cur_needed_names = []
         cur_rpath = b""
@@ -1131,14 +1125,14 @@ class ElfFile:
             raise ValueError("Section not found: " + name.decode("utf-8"))
         return s
 
-    def find_shdr(self, name: bytes) -> Optional[Elf_Shdr]:
+    def find_shdr(self, name: bytes) -> Elf_Shdr | None:
         assert isinstance(name, bytes), "expected name to be of type bytes"
-        for shdr, shdr_name in zip(self.shdrs, self.shdr_names):
+        for shdr, shdr_name in zip(self.shdrs, self.shdr_names, strict=False):
             if shdr_name == name:
                 return shdr
         return None
 
-    def _get_last_load_segment(self) -> Optional[Elf_Phdr]:
+    def _get_last_load_segment(self) -> Elf_Phdr | None:
         last_load = None
         for phdr in self.phdrs:
             if phdr.p_type == PT_LOAD:
@@ -1171,9 +1165,9 @@ class ElfFile:
 
     def rewrite(
         self,
-        new_soname: Optional[bytes] = None,
-        new_rpath: Optional[bytes] = None,
-        needed_replacements: Optional[Dict[bytes, bytes]] = None,
+        new_soname: bytes | None = None,
+        new_rpath: bytes | None = None,
+        needed_replacements: dict[bytes, bytes] | None = None,
     ) -> None:
         if self.ehdr.e_type not in (ET_EXEC, ET_DYN):
             raise ValueError("ELF e_type must be ET_EXEC or ET_DYN")
@@ -1259,7 +1253,7 @@ def get_strtab_entry(strtab: bytes, start: int) -> bytes:
     return strtab[start:end]
 
 
-def build_dynstr(soname: bytes, rpath: bytes, needed: Set[bytes], vernaux_versions: Set[bytes], prefix=b"") -> Dynstr:
+def build_dynstr(soname: bytes, rpath: bytes, needed: set[bytes], vernaux_versions: set[bytes], prefix=b"") -> Dynstr:
     result = prefix + b"$PATCH$\0"
     soname_pos = len(result)
     result += soname + b"\0"

@@ -8,8 +8,7 @@
 """Read the ELF dependency tree
 
 This does not work like `ldd` in that we do not execute/load code (only read
-files on disk), and we parse the dependency structure as a tree rather than
- a flat list.
+files on disk).
 """
 
 from __future__ import annotations
@@ -19,15 +18,148 @@ import functools
 import glob
 import logging
 import os
+import re
+from dataclasses import dataclass
+from fnmatch import fnmatch
 from pathlib import Path
-from typing import Any
 
+from elftools.elf.constants import E_FLAGS
 from elftools.elf.elffile import ELFFile
+from elftools.elf.sections import NoteSection
 
-from .libc import Libc, get_libc
+from repairwheel._vendor.auditwheel.architecture import Architecture
+from repairwheel._vendor.auditwheel.error import InvalidLibcError
+from repairwheel._vendor.auditwheel.libc import Libc
 
 log = logging.getLogger(__name__)
-__all__ = ["lddtree"]
+__all__ = ["LIBPYTHON_RE", "DynamicExecutable", "DynamicLibrary", "ldd"]
+
+# Regex to match libpython shared library names
+LIBPYTHON_RE = re.compile(r"^libpython\d+\.\d+m?.so(\.\d)*$")
+
+
+@dataclass(frozen=True)
+class Platform:
+    _elf_osabi: str
+    _elf_class: int
+    _elf_little_endian: bool
+    _elf_machine: str
+    _base_arch: Architecture | None
+    _ext_arch: Architecture | None
+    _error_msg: str | None
+
+    def is_compatible(self, other: Platform) -> bool:
+        os_abis = frozenset((self._elf_osabi, other._elf_osabi))
+        compat_sets = (frozenset(f"ELFOSABI_{x}" for x in ("NONE", "SYSV", "GNU", "LINUX")),)
+        return (
+            (len(os_abis) == 1 or any(os_abis.issubset(x) for x in compat_sets))
+            and self._elf_class == other._elf_class
+            and self._elf_little_endian == other._elf_little_endian
+            and self._elf_machine == other._elf_machine
+        )
+
+    @property
+    def baseline_architecture(self) -> Architecture:
+        if self._base_arch is not None:
+            return self._base_arch
+        raise ValueError(self._error_msg)
+
+    @property
+    def extended_architecture(self) -> Architecture | None:
+        if self._error_msg is not None:
+            raise ValueError(self._error_msg)
+        return self._ext_arch
+
+
+@dataclass(frozen=True)
+class DynamicLibrary:
+    soname: str
+    path: str | None
+    realpath: Path | None
+    platform: Platform | None = None
+    needed: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class DynamicExecutable:
+    interpreter: str | None
+    libc: Libc | None
+    path: str
+    realpath: Path
+    platform: Platform
+    needed: tuple[str, ...]
+    rpath: tuple[str, ...]
+    runpath: tuple[str, ...]
+    libraries: dict[str, DynamicLibrary]
+
+
+def _get_platform(elf: ELFFile) -> Platform:
+    elf_osabi = elf.header["e_ident"]["EI_OSABI"]
+    elf_class = elf.elfclass
+    elf_little_endian = elf.little_endian
+    elf_machine = elf["e_machine"]
+    base_arch = {
+        ("EM_386", 32, True): Architecture.i686,
+        ("EM_X86_64", 64, True): Architecture.x86_64,
+        ("EM_PPC64", 64, True): Architecture.ppc64le,
+        ("EM_PPC64", 64, False): Architecture.ppc64,
+        ("EM_RISCV", 64, True): Architecture.riscv64,
+        ("EM_AARCH64", 64, True): Architecture.aarch64,
+        ("EM_S390", 64, False): Architecture.s390x,
+        ("EM_ARM", 32, True): Architecture.armv7l,
+        ("EM_LOONGARCH", 64, True): Architecture.loongarch64,
+    }.get((elf_machine, elf_class, elf_little_endian), None)
+    ext_arch: Architecture | None = None
+    error_msg: str | None = None
+    flags = elf["e_flags"]
+    assert base_arch is None or base_arch.baseline == base_arch  # noqa: S101
+    if base_arch is None:
+        error_msg = "Unknown architecture"
+    elif base_arch == Architecture.x86_64:
+        for section in elf.iter_sections():
+            if not isinstance(section, NoteSection):
+                continue
+            for note in section.iter_notes():
+                if note["n_type"] != "NT_GNU_PROPERTY_TYPE_0":
+                    continue
+                if note["n_name"] != "GNU":
+                    continue
+                for prop in note["n_desc"]:
+                    if prop.pr_type != "GNU_PROPERTY_X86_ISA_1_NEEDED":
+                        continue
+                    if prop.pr_datasz != 4:
+                        continue
+                    data = prop.pr_data
+                    data -= data & 1  # clear baseline
+                    if data & 8 == 8:
+                        ext_arch = Architecture.x86_64_v4
+                        break
+                    if data & 4 == 4:
+                        ext_arch = Architecture.x86_64_v3
+                        break
+                    if data & 2 == 2:
+                        ext_arch = Architecture.x86_64_v2
+                        break
+                    if data != 0:
+                        error_msg = "unknown x86_64 ISA"
+                break
+    elif base_arch == Architecture.armv7l:
+        if (flags & E_FLAGS.EF_ARM_EABIMASK) != E_FLAGS.EF_ARM_EABI_VER5:
+            error_msg = "Invalid ARM EABI version for armv7l"
+        elif (flags & E_FLAGS.EF_ARM_ABI_FLOAT_HARD) != E_FLAGS.EF_ARM_ABI_FLOAT_HARD:
+            error_msg = "armv7l shall use hard-float"
+        if error_msg is not None:
+            base_arch = None
+
+    return Platform(
+        elf_osabi,
+        elf_class,
+        elf_little_endian,
+        elf_machine,
+        base_arch,
+        ext_arch,
+        error_msg,
+    )
 
 
 def normpath(path: str) -> str:
@@ -41,7 +173,7 @@ def normpath(path: str) -> str:
     return os.path.normpath(path).replace("//", "/")
 
 
-def readlink(path: str, root: str, prefixed: bool = False) -> str:
+def readlink(path: str, root: str, *, prefixed: bool = False) -> str:
     """Like os.readlink(), but relative to a ``root``
 
     This does not currently handle the pathological case:
@@ -63,6 +195,7 @@ def readlink(path: str, root: str, prefixed: bool = False) -> str:
     Returns
     -------
     A fully resolved symlink path
+
     """
     root = root.rstrip("/")
     if prefixed:
@@ -100,22 +233,23 @@ def parse_ld_paths(str_ldpaths: str, path: str, root: str = "") -> list[str]:
     Returns
     -------
         list of processed paths
+
     """
     ldpaths: list[str] = []
     for ldpath in str_ldpaths.split(":"):
         if ldpath == "":
             # The ldso treats "" paths as $PWD.
-            ldpath = os.getcwd()
+            ldpath_ = os.getcwd()
         elif "$ORIGIN" in ldpath:
-            ldpath = ldpath.replace("$ORIGIN", os.path.dirname(os.path.abspath(path)))
+            ldpath_ = ldpath.replace("$ORIGIN", os.path.dirname(os.path.abspath(path)))
         else:
-            ldpath = root + ldpath
-        ldpaths.append(normpath(ldpath))
+            ldpath_ = root + ldpath
+        ldpaths.append(normpath(ldpath_))
     return [p for p in dedupe(ldpaths) if os.path.isdir(p)]
 
 
 @functools.lru_cache
-def parse_ld_so_conf(ldso_conf: str, root: str = "/", _first: bool = True) -> list[str]:
+def parse_ld_so_conf(ldso_conf: str, *, root: str = "/", _first: bool = True) -> list[str]:
     """Load all the paths from a given ldso config file
 
     This should handle comments, whitespace, and "include" statements.
@@ -132,6 +266,7 @@ def parse_ld_so_conf(ldso_conf: str, root: str = "/", _first: bool = True) -> li
     Returns
     -------
     list of paths found
+
     """
     paths: list[str] = []
 
@@ -139,8 +274,8 @@ def parse_ld_so_conf(ldso_conf: str, root: str = "/", _first: bool = True) -> li
     try:
         log.debug("%sparse_ld_so_conf(%s)", dbg_pfx, ldso_conf)
         with open(ldso_conf) as f:
-            for line in f.readlines():
-                line = line.split("#", 1)[0].strip()
+            for input_line in f:
+                line = input_line.split("#", 1)[0].strip()
                 if not line:
                     continue
                 if line.startswith("include "):
@@ -159,7 +294,7 @@ def parse_ld_so_conf(ldso_conf: str, root: str = "/", _first: bool = True) -> li
             log.warning(e)
 
     if _first:
-        # XXX: Load paths from ldso itself.
+        # TODO: Load paths from ldso itself.
         # Remove duplicate entries to speed things up.
         paths = [p for p in dedupe(paths) if os.path.isdir(p)]
 
@@ -167,7 +302,11 @@ def parse_ld_so_conf(ldso_conf: str, root: str = "/", _first: bool = True) -> li
 
 
 @functools.lru_cache
-def load_ld_paths(root: str = "/", prefix: str = "") -> dict[str, list[str]]:
+def load_ld_paths(
+    libc: Libc | None,
+    root: str = "/",
+    prefix: str = "",
+) -> dict[str, list[str]]:
     """Load linker paths from common locations
 
     This parses the ld.so.conf and LD_LIBRARY_PATH env var.
@@ -182,8 +321,9 @@ def load_ld_paths(root: str = "/", prefix: str = "") -> dict[str, list[str]]:
     Returns
     -------
     dict containing library paths to search
+
     """
-    ldpaths: dict = {"conf": [], "env": [], "interp": []}
+    ldpaths: dict[str, list[str]] = {"conf": [], "env": [], "interp": []}
 
     # Load up $LD_LIBRARY_PATH.
     env_ldpath = os.environ.get("LD_LIBRARY_PATH")
@@ -191,17 +331,16 @@ def load_ld_paths(root: str = "/", prefix: str = "") -> dict[str, list[str]]:
         if root != "/":
             log.warning("ignoring LD_LIBRARY_PATH due to ROOT usage")
         else:
-            # XXX: If this contains $ORIGIN, we probably have to parse this
+            # TODO: If this contains $ORIGIN, we probably have to parse this
             # on a per-ELF basis so it can get turned into the right thing.
             ldpaths["env"] = parse_ld_paths(env_ldpath, path="")
 
-    libc = get_libc()
     if libc == Libc.MUSL:
         # from https://git.musl-libc.org/cgit/musl/tree/ldso
         # /dynlink.c?id=3f701faace7addc75d16dea8a6cd769fa5b3f260#n1063
         root_prefix = Path(root) / prefix
         ld_musl = list((root_prefix / "etc").glob("ld-musl-*.path"))
-        assert len(ld_musl) <= 1
+        assert len(ld_musl) <= 1  # noqa: S101
         if len(ld_musl) == 0:
             ldpaths["conf"] = [
                 root + "/lib",
@@ -224,51 +363,19 @@ def load_ld_paths(root: str = "/", prefix: str = "") -> dict[str, list[str]]:
     return ldpaths
 
 
-def compatible_elfs(elf1: ELFFile, elf2: ELFFile) -> bool:
-    """See if two ELFs are compatible
-
-    This compares the aspects of the ELF to see if they're compatible:
-    bit size, endianness, machine type, and operating system.
-
-    Parameters
-    ----------
-    elf1 : ELFFile
-    elf2 : ELFFile
-
-    Returns
-    -------
-    True if compatible, False otherwise
-    """
-    osabis = frozenset(e.header["e_ident"]["EI_OSABI"] for e in (elf1, elf2))
-    compat_sets = (
-        frozenset(
-            "ELFOSABI_%s" % x
-            for x in (
-                "NONE",
-                "SYSV",
-                "GNU",
-                "LINUX",
-            )
-        ),
-    )
-    return (
-        (len(osabis) == 1 or any(osabis.issubset(x) for x in compat_sets))
-        and elf1.elfclass == elf2.elfclass
-        and elf1.little_endian == elf2.little_endian
-        and elf1.header["e_machine"] == elf2.header["e_machine"]
-    )
-
-
 def find_lib(
-    elf: ELFFile, lib: str, ldpaths: list[str], root: str = "/"
-) -> tuple[str | None, str | None]:
+    platform: Platform,
+    lib: str,
+    ldpaths: list[str],
+    root: str = "/",
+) -> tuple[Path | None, str | None]:
     """Try to locate a ``lib`` that is compatible to ``elf`` in the given
     ``ldpaths``
 
     Parameters
     ----------
-    elf : ELFFile
-        The elf which the library should be compatible with (ELF wise)
+    platform : Platform
+        The platform which the library should be compatible with (ELF wise)
     lib : str
         The library (basename) to search for
     ldpaths : list[str]
@@ -279,31 +386,30 @@ def find_lib(
     Returns
     -------
     Tuple of the full path to the desired library and the real path to it
-    """
 
+    """
     for ldpath in ldpaths:
         path = os.path.join(ldpath, lib)
-        target = readlink(path, root, prefixed=True)
+        target = Path(readlink(path, root, prefixed=True))
 
-        if os.path.exists(target):
+        if target.exists():
             with open(target, "rb") as f:
                 libelf = ELFFile(f)
-                if compatible_elfs(elf, libelf):
-                    return (target, path)
+                if platform.is_compatible(_get_platform(libelf)):
+                    return target, path
 
-    return (None, None)
+    return None, None
 
 
-def lddtree(
-    path: str,
+def ldd(
+    path: Path,
     root: str = "/",
     prefix: str = "",
     ldpaths: dict[str, list[str]] | None = None,
     display: str | None = None,
     exclude: frozenset[str] = frozenset(),
-    _first: bool = True,
-    _all_libs: dict = {},
-) -> dict:
+    _all_libs: dict[str, DynamicLibrary] | None = None,
+) -> DynamicExecutable:
     """Parse the ELF dependency tree of the specified file
 
     Parameters
@@ -323,8 +429,6 @@ def lddtree(
         The path to show rather than ``path``
     exclude
         List of soname (DT_NEEDED) to exclude from the tree
-    _first
-        Recursive use only; is this the first ELF?
     _all_libs
         Recursive use only; dict of all libs we've seen
 
@@ -345,122 +449,167 @@ def lddtree(
         },
       },
     }
-    """
-    if not ldpaths:
-        ldpaths = load_ld_paths().copy()
 
-    if _first:
+    """
+    _first = _all_libs is None
+    if _all_libs is None:
         _all_libs = {}
 
-    ret: dict[str, Any] = {
-        "interp": None,
-        "path": path if display is None else display,
-        "realpath": path,
-        "needed": [],
-        "rpath": [],
-        "runpath": [],
-        "libs": _all_libs,
-    }
+    log.debug("ldd(%s)", path)
 
-    log.debug("lddtree(%s)" % path)
+    interpreter: str | None = None
+    libc: Libc | None = None
+    needed: list[str] = []
+    rpaths: list[str] = []
+    runpaths: list[str] = []
 
     with open(path, "rb") as f:
         elf = ELFFile(f)
+
+        # get the platform
+        platform = _get_platform(elf)
 
         # If this is the first ELF, extract the interpreter.
         if _first:
             for segment in elf.iter_segments():
                 if segment.header.p_type != "PT_INTERP":
                     continue
-
                 interp = segment.get_interp_name()
                 log.debug("  interp           = %s", interp)
-                ret["interp"] = normpath(root + interp)
-                ret["libs"][os.path.basename(interp)] = {
-                    "path": ret["interp"],
-                    "realpath": readlink(ret["interp"], root, prefixed=True),
-                    "needed": [],
-                }
-                # XXX: Should read it and scan for /lib paths.
+                interpreter = normpath(root + interp)
+                soname = os.path.basename(interpreter)
+                _all_libs[soname] = DynamicLibrary(
+                    soname,
+                    interpreter,
+                    Path(readlink(interpreter, root, prefixed=True)),
+                    platform,
+                )
+                # if we have an interpreter and it's not MUSL, assume GLIBC
+                libc = Libc.MUSL if soname.startswith("ld-musl-") else Libc.GLIBC
+                if ldpaths is None:
+                    ldpaths = load_ld_paths(libc).copy()
+                # TODO: Should read it and scan for /lib paths.
                 ldpaths["interp"] = [
                     normpath(root + os.path.dirname(interp)),
                     normpath(
-                        root + prefix + "/usr" + os.path.dirname(interp).lstrip(prefix)
+                        root + prefix + "/usr" + os.path.dirname(interp).lstrip(prefix),
                     ),
                 ]
                 log.debug("  ldpaths[interp]  = %s", ldpaths["interp"])
                 break
 
         # Parse the ELF's dynamic tags.
-        libs: list[str] = []
-        rpaths: list[str] = []
-        runpaths: list[str] = []
         for segment in elf.iter_segments():
             if segment.header.p_type != "PT_DYNAMIC":
                 continue
-
             for t in segment.iter_tags():
                 if t.entry.d_tag == "DT_RPATH":
-                    rpaths = parse_ld_paths(t.rpath, path=path, root=root)
+                    rpaths = parse_ld_paths(t.rpath, path=str(path), root=root)
                 elif t.entry.d_tag == "DT_RUNPATH":
-                    runpaths = parse_ld_paths(t.runpath, path=path, root=root)
+                    runpaths = parse_ld_paths(t.runpath, path=str(path), root=root)
                 elif t.entry.d_tag == "DT_NEEDED":
-                    if t.needed in exclude:
-                        log.info(f"Excluding {t.needed}")
-                    else:
-                        libs.append(t.needed)
+                    needed.append(t.needed)
             if runpaths:
                 # If both RPATH and RUNPATH are set, only the latter is used.
                 rpaths = []
 
-            # XXX: We assume there is only one PT_DYNAMIC.  This is
+            # We assume there is only one PT_DYNAMIC.  This is
             # probably fine since the runtime ldso does the same.
             break
-        if _first:
-            # Propagate the rpaths used by the main ELF since those will be
-            # used at runtime to locate things.
-            ldpaths["rpath"] = rpaths
-            ldpaths["runpath"] = runpaths
-            log.debug("  ldpaths[rpath]   = %s", rpaths)
-            log.debug("  ldpaths[runpath] = %s", runpaths)
-        ret["rpath"] = rpaths
-        ret["runpath"] = runpaths
-        ret["needed"] = libs
-
-        # Search for the libs this ELF uses.
-        all_ldpaths: list[str] | None = None
-        for lib in libs:
-            if lib in _all_libs:
-                continue
-            if all_ldpaths is None:
-                all_ldpaths = (
-                    ldpaths["rpath"]
-                    + rpaths
-                    + runpaths
-                    + ldpaths["env"]
-                    + ldpaths["runpath"]
-                    + ldpaths["conf"]
-                    + ldpaths["interp"]
-                )
-            realpath, fullpath = find_lib(elf, lib, all_ldpaths, root)
-            _all_libs[lib] = {
-                "realpath": realpath,
-                "path": fullpath,
-                "needed": [],
-            }
-            if realpath and fullpath:
-                lret = lddtree(
-                    realpath,
-                    root,
-                    prefix,
-                    ldpaths,
-                    display=fullpath,
-                    exclude=exclude,
-                    _first=False,
-                    _all_libs=_all_libs,
-                )
-                _all_libs[lib]["needed"] = lret["needed"]
 
         del elf
 
-    return ret
+    if _first:
+        # get the libc based on dependencies
+        for soname in needed:
+            if soname.startswith(("libc.musl-", "ld-musl-")):
+                if libc is None:
+                    libc = Libc.MUSL
+                if libc != Libc.MUSL:
+                    msg = f"found a dependency on MUSL but the libc is already set to {libc}"
+                    raise InvalidLibcError(msg)
+            elif soname == "libc.so.6" or soname.startswith(("ld-linux-", "ld64.so.")):
+                if libc is None:
+                    libc = Libc.GLIBC
+                if libc != Libc.GLIBC:
+                    msg = f"found a dependency on GLIBC but the libc is already set to {libc}"
+                    raise InvalidLibcError(msg)
+        if libc is None:
+            # try the filename as a last resort
+            if path.name.endswith(("-arm-linux-musleabihf.so", "-linux-musl.so")):
+                libc = Libc.MUSL
+            elif path.name.endswith(("-arm-linux-gnueabihf.so", "-linux-gnu.so")):
+                # before python 3.11, musl was also using gnu
+                soabi = path.stem.split(".")[-1].split("-")
+                valid_python = tuple(f"3{minor}" for minor in range(11, 100))
+                if soabi[0] == "cpython" and soabi[1].startswith(valid_python):
+                    libc = Libc.GLIBC
+
+        if ldpaths is None:
+            ldpaths = load_ld_paths(libc).copy()
+        # Propagate the rpaths used by the main ELF since those will be
+        # used at runtime to locate things.
+        ldpaths["rpath"] = rpaths
+        ldpaths["runpath"] = runpaths
+        log.debug("  ldpaths[rpath]   = %s", rpaths)
+        log.debug("  ldpaths[runpath] = %s", runpaths)
+
+    assert ldpaths is not None  # noqa: S101
+
+    all_ldpaths = (
+        ldpaths["rpath"]
+        + rpaths
+        + runpaths
+        + ldpaths["env"]
+        + ldpaths["runpath"]
+        + ldpaths["conf"]
+        + ldpaths["interp"]
+    )
+    _excluded_libs: set[str] = set()
+    for soname in needed:
+        if soname in _all_libs:
+            continue
+        if soname in _excluded_libs:
+            continue
+        if any(fnmatch(soname, e) for e in exclude):
+            log.info("Excluding %s", soname)
+            _excluded_libs.add(soname)
+            continue
+
+        # special case for libpython, see https://github.com/pypa/auditwheel/issues/589
+        # we want to return the dependency to be able to remove it later on but
+        # we don't want to analyze it for symbol versions nor do we want to analyze its
+        # dependencies as it will be removed.
+        if LIBPYTHON_RE.match(soname):
+            log.info("Skip %s resolution", soname)
+            _all_libs[soname] = DynamicLibrary(soname, None, None)
+            continue
+
+        realpath, fullpath = find_lib(platform, soname, all_ldpaths, root)
+        if realpath is not None and any(fnmatch(str(realpath), e) for e in exclude):
+            log.info("Excluding %s", realpath)
+            _excluded_libs.add(soname)
+            continue
+        _all_libs[soname] = DynamicLibrary(soname, fullpath, realpath)
+        if realpath is None or fullpath is None:
+            continue
+        dependency = ldd(realpath, root, prefix, ldpaths, fullpath, exclude, _all_libs)
+        _all_libs[soname] = DynamicLibrary(
+            soname,
+            fullpath,
+            realpath,
+            dependency.platform,
+            dependency.needed,
+        )
+
+    return DynamicExecutable(
+        interpreter,
+        libc,
+        str(path) if display is None else display,
+        path,
+        platform,
+        tuple(soname for soname in needed if soname not in _excluded_libs),
+        tuple(rpaths),
+        tuple(runpaths),
+        _all_libs,
+    )

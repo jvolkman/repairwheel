@@ -11,8 +11,6 @@ import urllib.request
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional
-
 
 SCRIPT_DIR = Path(__file__).parent.resolve()
 WHEEL_NAME = "testwheel"
@@ -29,13 +27,13 @@ Version: {WHEEL_VERSION}
 class BuildInfo:
     target: str
     tag: str
-    dep_cflags: List[str]
+    dep_cflags: list[str]
     dep_name: str
-    ext_cflags: List[str]
+    ext_cflags: list[str]
     ext_name: str
     python_url: str
-    app_cflags: Optional[List[str]] = None
-    app_name: Optional[str] = None
+    app_cflags: list[str] | None = None
+    app_name: str | None = None
 
 
 LINUX_X86_64_BUILD = BuildInfo(
@@ -129,7 +127,7 @@ def build_testdep(build_info: BuildInfo, build_dir: Path) -> Path:
     return out_file
 
 
-def build_testapp(build_info: BuildInfo, build_dir: Path, lib_dir: Path) -> Optional[Path]:
+def build_testapp(build_info: BuildInfo, build_dir: Path, lib_dir: Path) -> Path | None:
     if not build_info.app_name:
         return None
     print(f"Building {build_info.app_name}")
@@ -175,7 +173,7 @@ def build_wheel_manifest(build_info: BuildInfo) -> str:
     return "\n".join(lines) + "\n"
 
 
-def build_record(files: Dict[str, bytes], record_file: str) -> str:
+def build_record(files: dict[str, bytes], record_file: str) -> str:
     records = []
     for fname in sorted(files):
         data = files[fname]
@@ -186,7 +184,7 @@ def build_record(files: Dict[str, bytes], record_file: str) -> str:
     return "\n".join(records) + "\n"
 
 
-def build_wheel(build_info: BuildInfo, ext_file: Path, app_file: Optional[Path], out_dir: Path) -> None:
+def build_wheel(build_info: BuildInfo, ext_file: Path, app_file: Path | None, out_dir: Path) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     wheel_file = out_dir / f"{WHEEL_NAME}-{WHEEL_VERSION}-{build_info.tag}.whl"
     print(f"Building {wheel_file}")

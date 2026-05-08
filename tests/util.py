@@ -5,7 +5,6 @@ import tempfile
 import venv
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Optional
 
 from packaging.tags import sys_tags
 from packaging.utils import parse_wheel_filename
@@ -16,10 +15,10 @@ class TestWheel:
     __test__ = False  # Tell pytest to ignore this
     tag: str
     wheel: Path
-    lib_dir: Optional[Path] = None
+    lib_dir: Path | None = None
 
 
-def patch_wheel(wheel: Path, lib_dir: Optional[Path], out_dir: Path, env: Optional[Dict[str, str]] = None) -> None:
+def patch_wheel(wheel: Path, lib_dir: Path | None, out_dir: Path, env: dict[str, str] | None = None) -> None:
     subprocess.check_call(
         [
             sys.executable,
@@ -41,7 +40,7 @@ def patch_wheel(wheel: Path, lib_dir: Optional[Path], out_dir: Path, env: Option
     )
 
 
-def get_patched_wheel(testwheel: TestWheel, patched_wheel_area: Path, env: Optional[Dict[str, str]] = None) -> Path:
+def get_patched_wheel(testwheel: TestWheel, patched_wheel_area: Path, env: dict[str, str] | None = None) -> Path:
     out_dir = patched_wheel_area / testwheel.tag
     out_dir.mkdir(parents=True, exist_ok=True)
     patch_wheel(testwheel.wheel, testwheel.lib_dir, out_dir, env)

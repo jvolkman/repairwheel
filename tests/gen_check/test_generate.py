@@ -4,7 +4,6 @@ from pathlib import Path
 
 import pytest
 
-
 if "TESTWHEEL_GENERATE_PATH" not in os.environ:
     pytest.skip(allow_module_level=True)
 

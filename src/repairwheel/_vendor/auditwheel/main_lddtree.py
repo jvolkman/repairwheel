@@ -1,20 +1,25 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    import argparse
 
 logger = logging.getLogger(__name__)
 
 
-def configure_subparser(sub_parsers):
-    help = "Analyze a single ELF file (similar to ``ldd``)."
-    p = sub_parsers.add_parser("lddtree", help=help, description=help)
-    p.add_argument("file", help="Path to .so file")
+def configure_subparser(sub_parsers: Any) -> None:  # noqa: ANN401
+    help_ = "Analyze a single ELF file (similar to ``ldd``)."
+    p = sub_parsers.add_parser("lddtree", help=help_, description=help_)
+    p.add_argument("file", type=Path, help="Path to .so file")
     p.set_defaults(func=execute)
 
 
-def execute(args, p):
-    import json
+def execute(args: argparse.Namespace, p: argparse.ArgumentParser) -> int:  # noqa: ARG001
+    from repairwheel._vendor.auditwheel import json
+    from repairwheel._vendor.auditwheel.lddtree import ldd
 
-    from .lddtree import lddtree
-
-    logger.info(json.dumps(lddtree(args.file), indent=4))
+    logger.info(json.dumps(ldd(args.file)))
+    return 0
