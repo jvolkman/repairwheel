@@ -1,9 +1,6 @@
 import logging
 import struct
-from typing import Callable
-from typing import FrozenSet
-from typing import Optional
-from typing import Tuple
+from collections.abc import Callable
 from typing import TypeVar
 from macholib.MachO import MachO
 from macholib.MachO import MachOHeader
@@ -121,7 +118,7 @@ def _all_arches_same_value(macho: MachO, fn: Callable[[MachOHeader], T]) -> T:
     return val
 
 
-def get_install_names(filename: str) -> Tuple[str, ...]:
+def get_install_names(filename: str) -> tuple[str, ...]:
     """Return install names from library named in `filename`
 
     Returns tuple of install names
@@ -147,7 +144,7 @@ def get_install_names(filename: str) -> Tuple[str, ...]:
     """
 
     # otool -L
-    def _val(header: MachOHeader) -> Tuple[str]:
+    def _val(header: MachOHeader) -> tuple[str]:
         results = []
         for entry in header.commands:
             lc, cmd, _ = entry
@@ -170,7 +167,7 @@ def get_install_names(filename: str) -> Tuple[str, ...]:
         return ()
 
 
-def get_install_id(filename: str) -> Optional[str]:
+def get_install_id(filename: str) -> str | None:
     """Return install id from library named in `filename`
 
     Returns None if no install id, or if this is not an object file.
@@ -192,7 +189,7 @@ def get_install_id(filename: str) -> Optional[str]:
     """
 
     # otool -D
-    def _val(header: MachOHeader) -> Optional[str]:
+    def _val(header: MachOHeader) -> str | None:
         if header.id_cmd is not None:
             entry = header.commands[header.id_cmd]
             _, cmd, _ = entry
@@ -274,7 +271,7 @@ def set_install_id(filename: str, install_id: str, ad_hoc_sign: bool = True):
             replace_signature(filename, "-")
 
 
-def get_rpaths(filename: str) -> Tuple[str, ...]:
+def get_rpaths(filename: str) -> tuple[str, ...]:
     """Return a tuple of rpaths from the library `filename`.
 
     If `filename` is not a library then the returned tuple will be empty.
@@ -298,7 +295,7 @@ def get_rpaths(filename: str) -> Tuple[str, ...]:
     """
 
     # otool -l
-    def _val(header: MachOHeader) -> Tuple[str]:
+    def _val(header: MachOHeader) -> tuple[str]:
         results = []
         for entry in header.commands:
             lc, cmd, _ = entry
@@ -317,7 +314,7 @@ def get_rpaths(filename: str) -> Tuple[str, ...]:
         return ()
 
 
-def get_archs(filename: str) -> FrozenSet[str]:
+def get_archs(filename: str) -> frozenset[str]:
     """Return architecture types from library `libname`
 
     Parameters

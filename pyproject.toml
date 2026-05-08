@@ -60,6 +60,7 @@ ignore = [
   "RUF012", # https://github.com/astral-sh/ruff/issues/5243
 ]
 src = ["src"]
+exclude = ["src/repairwheel/_vendor"]
 target-version = "py310"
 
 [tool.ruff.mccabe]

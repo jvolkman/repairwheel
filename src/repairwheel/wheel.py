@@ -7,11 +7,10 @@ import zipfile
 from datetime import datetime
 from io import StringIO
 from pathlib import Path
-from typing import BinaryIO, Dict, List, Optional, Tuple
+from typing import BinaryIO
 from zipfile import ZipFile, ZipInfo
 
 from packaging.utils import canonicalize_name, parse_wheel_filename
-
 
 DEFAULT_MTIME = datetime.fromisoformat("1980-01-01T00:00:00")
 # Taken from shutil in 3.8+
@@ -30,7 +29,7 @@ def _dist_normalized_name(name: str) -> str:
     return normal_name.replace("-", "_")
 
 
-def _sorted_zip_entries(file: ZipFile) -> List[ZipInfo]:
+def _sorted_zip_entries(file: ZipFile) -> list[ZipInfo]:
     # Sort zip entries lexicographically, and place dist-info files at the end as suggested by PEP-427.
     # Filters out the RECORD file which we'll re-generate at the end.
     wheel_name = Path(file.filename).name
@@ -56,7 +55,7 @@ def _sorted_zip_entries(file: ZipFile) -> List[ZipInfo]:
     return sorted(other_infos, key=sort_key) + sorted(dist_info_infos, key=sort_key)
 
 
-def _copy_and_hash(fsrc: BinaryIO, fdst: BinaryIO) -> Tuple[str, int]:
+def _copy_and_hash(fsrc: BinaryIO, fdst: BinaryIO) -> tuple[str, int]:
     # Localize variable access to minimize overhead.
     fsrc_read = fsrc.read
     fdst_write = fdst.write
@@ -75,7 +74,7 @@ def _copy_and_hash(fsrc: BinaryIO, fdst: BinaryIO) -> Tuple[str, int]:
     )
 
 
-def _gather_original_file_modes(original_wheel: Path) -> Dict[str, int]:
+def _gather_original_file_modes(original_wheel: Path) -> dict[str, int]:
     dist_name, dist_version, _, _ = parse_wheel_filename(original_wheel.name)
 
     with ZipFile(original_wheel) as original_wheel_zip:
@@ -109,7 +108,7 @@ def write_canonical_wheel(
     out_dir: Path,
     default_file_mode: int = 0o664,
     default_dir_mode: int = 0o775,
-    mtime: Optional[datetime] = None,
+    mtime: datetime | None = None,
     compression: int = zipfile.ZIP_DEFLATED,
 ) -> Path:
     """This function rewrites a wheel in a canonical form.

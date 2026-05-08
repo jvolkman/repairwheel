@@ -1,7 +1,6 @@
 import logging
 import zlib
 from pathlib import Path
-from typing import List
 
 from packaging.utils import parse_wheel_filename
 
@@ -23,7 +22,7 @@ def get_machine_from_wheel(wheel: Path) -> str:
     return machine
 
 
-def repair(wheel_file: Path, output_dir: Path, lib_path: List[Path], use_sys_paths: bool, verbosity: int = 0) -> None:
+def repair(wheel_file: Path, output_dir: Path, lib_path: list[Path], use_sys_paths: bool, verbosity: int = 0) -> None:
     target_machine = get_machine_from_wheel(wheel_file)
     monkeypatch.patch_load_ld_paths(lib_path, use_sys_paths)
 
