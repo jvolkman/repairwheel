@@ -2,73 +2,88 @@ from __future__ import annotations
 
 import argparse
 import logging
-from os.path import abspath, basename, exists, isfile
+import shutil
+import zlib
+from pathlib import Path
+from typing import Any
 
+from repairwheel._vendor.auditwheel.architecture import Architecture
+from repairwheel._vendor.auditwheel.error import NonPlatformWheelError, WheelToolsError
+from repairwheel._vendor.auditwheel.libc import Libc
 from repairwheel._vendor.auditwheel.patcher import Patchelf
-
-from .policy import WheelPolicies
-from .tools import EnvironmentDefault
+from repairwheel._vendor.auditwheel.policy import WheelPolicies
+from repairwheel._vendor.auditwheel.tools import EnvironmentDefault
+from repairwheel._vendor.auditwheel.wheeltools import get_wheel_architecture, get_wheel_libc
 
 logger = logging.getLogger(__name__)
 
 
-def configure_parser(sub_parsers):
-    wheel_policy = WheelPolicies()
-    policies = wheel_policy.policies
-    policy_names = [p["name"] for p in policies]
-    policy_names += [alias for p in policies for alias in p["aliases"]]
+def configure_parser(sub_parsers: Any) -> None:  # noqa: ANN401
+    policies = WheelPolicies(libc=Libc.detect(), arch=Architecture.detect())
+    policy_names = [p.name for p in policies if p != policies.linux]
+    policy_names += [alias for p in policies for alias in p.aliases]
+    policy_names += ["auto"]
     epilog = """PLATFORMS:
 These are the possible target platform tags, as specified by PEP 600.
 Note that old, pre-PEP 600 tags are still usable and are listed as aliases
 below.
 """
     for p in policies:
-        epilog += f"- {p['name']}"
-        if len(p["aliases"]) > 0:
-            epilog += f" (aliased by {', '.join(p['aliases'])})"
+        epilog += f"- {p.name}"
+        if len(p.aliases) > 0:
+            epilog += f" (aliased by {', '.join(p.aliases)})"
         epilog += "\n"
-    highest_policy = wheel_policy.get_policy_name(wheel_policy.priority_highest)
-    help = """Vendor in external shared library dependencies of a wheel.
+    help_ = """Vendor in external shared library dependencies of a wheel.
 If multiple wheels are specified, an error processing one
 wheel will abort processing of subsequent wheels.
 """
-    p = sub_parsers.add_parser(
+    parser = sub_parsers.add_parser(
         "repair",
-        help=help,
-        description=help,
+        help=help_,
+        description=help_,
         epilog=epilog,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    p.add_argument("WHEEL_FILE", help="Path to wheel file.", nargs="+")
-    p.add_argument(
+    parser.add_argument("WHEEL_FILE", type=Path, help="Path to wheel file.", nargs="+")
+    parser.add_argument(
+        "-z",
+        "--zip-compression-level",
+        action=EnvironmentDefault,
+        metavar="ZIP_COMPRESSION_LEVEL",
+        env="AUDITWHEEL_ZIP_COMPRESSION_LEVEL",
+        dest="ZIP_COMPRESSION_LEVEL",
+        type=int,
+        help="Compress level to be used to create zip file.",
+        choices=list(range(zlib.Z_NO_COMPRESSION, zlib.Z_BEST_COMPRESSION + 1)),
+        default=zlib.Z_DEFAULT_COMPRESSION,
+    )
+    parser.add_argument(
         "--plat",
         action=EnvironmentDefault,
         metavar="PLATFORM",
         env="AUDITWHEEL_PLAT",
         dest="PLAT",
         help="Desired target platform. See the available platforms under the "
-        f'PLATFORMS section below. (default: "{highest_policy}")',
+        'PLATFORMS section below. (default: "auto")',
         choices=policy_names,
-        default=highest_policy,
+        default="auto",
     )
-    p.add_argument(
+    parser.add_argument(
         "-L",
         "--lib-sdir",
         dest="LIB_SDIR",
-        help=(
-            "Subdirectory in packages to store copied libraries." ' (default: ".libs")'
-        ),
+        help=('Subdirectory in packages to store copied libraries. (default: ".libs")'),
         default=".libs",
     )
-    p.add_argument(
+    parser.add_argument(
         "-w",
         "--wheel-dir",
         dest="WHEEL_DIR",
-        type=abspath,
-        help=("Directory to store delocated wheels (default:" ' "wheelhouse/")'),
+        type=Path,
+        help=('Directory to store delocated wheels (default: "wheelhouse/")'),
         default="wheelhouse/",
     )
-    p.add_argument(
+    parser.add_argument(
         "--no-update-tags",
         dest="UPDATE_TAGS",
         action="store_false",
@@ -78,109 +93,208 @@ wheel will abort processing of subsequent wheels.
         ),
         default=True,
     )
-    p.add_argument(
+    parser.add_argument(
         "--strip",
         dest="STRIP",
         action="store_true",
         help="Strip symbols in the resulting wheel",
         default=False,
     )
-    p.add_argument(
+    parser.add_argument(
         "--exclude",
         dest="EXCLUDE",
         help="Exclude SONAME from grafting into the resulting wheel "
-        "(can be specified multiple times)",
+        "Please make sure wheel metadata reflects your dependencies. "
+        "See https://github.com/pypa/auditwheel/pull/411#issuecomment-1500826281 "
+        "(can be specified multiple times) "
+        "(can contain wildcards, for example libfoo.so.*)",
         action="append",
         default=[],
     )
-    p.add_argument(
+    parser.add_argument(
         "--only-plat",
         dest="ONLY_PLAT",
         action="store_true",
         help="Do not check for higher policy compatibility",
         default=False,
     )
-    p.set_defaults(func=execute)
+    parser.add_argument(
+        "--disable-isa-ext-check",
+        dest="DISABLE_ISA_EXT_CHECK",
+        action="store_true",
+        help="Do not check for extended ISA compatibility (e.g. x86_64_v2)",
+        default=False,
+    )
+    parser.add_argument(
+        "--allow-pure-python-wheel",
+        dest="ALLOW_PURE_PY_WHEEL",
+        action="store_true",
+        help="Allow processing of pure Python wheels (no platform-specific binaries) without error",
+        default=False,
+    )
+    parser.set_defaults(func=execute)
 
 
-def execute(args, p):
-    import os
+def execute(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
+    from repairwheel._vendor.auditwheel.repair import repair_wheel
+    from repairwheel._vendor.auditwheel.wheel_abi import analyze_wheel_abi
 
-    from .repair import repair_wheel
-    from .wheel_abi import NonPlatformWheel, analyze_wheel_abi
+    exclude: frozenset[str] = frozenset(args.EXCLUDE)
+    wheel_dir: Path = args.WHEEL_DIR.absolute()
+    wheel_files: list[Path] = args.WHEEL_FILE
 
-    exclude = frozenset(args.EXCLUDE)
-    wheel_policy = WheelPolicies()
+    requested_architecture: Architecture | None = None
 
-    for wheel_file in args.WHEEL_FILE:
-        if not isfile(wheel_file):
-            p.error("cannot access %s. No such file" % wheel_file)
+    plat_base: str = args.PLAT
+    for a in Architecture:
+        suffix = f"_{a.value}"
+        if plat_base.endswith(suffix):
+            plat_base = plat_base[: -len(suffix)]
+            requested_architecture = a
+            break
 
-        logger.info("Repairing %s", basename(wheel_file))
+    for wheel_file in wheel_files:
+        if not wheel_file.is_file():
+            parser.error(f"cannot access {wheel_file}. No such file")
 
-        if not exists(args.WHEEL_DIR):
-            os.makedirs(args.WHEEL_DIR)
+        wheel_filename = wheel_file.name
+        arch = requested_architecture
+        is_pure_python = False
+        try:
+            arch = get_wheel_architecture(wheel_filename)
+            if requested_architecture is not None and requested_architecture != arch:
+                msg = (
+                    f"can't repair wheel {wheel_filename} with {arch.value} architecture to a "
+                    f"wheel targeting {requested_architecture.value}"
+                )
+                parser.error(msg)
+        except (WheelToolsError, NonPlatformWheelError) as e:
+            logger.warning(
+                "The architecture could not be deduced from the wheel filename",
+            )
+            is_pure_python = isinstance(e, NonPlatformWheelError)
 
         try:
-            wheel_abi = analyze_wheel_abi(wheel_policy, wheel_file, exclude)
-        except NonPlatformWheel:
-            logger.info(NonPlatformWheel.LOG_MESSAGE)
+            libc = get_wheel_libc(wheel_filename)
+        except WheelToolsError:
+            logger.debug("The libc could not be deduced from the wheel filename")
+            libc = None
+
+        if plat_base.startswith("manylinux"):
+            if libc is None:
+                libc = Libc.GLIBC
+            if libc != Libc.GLIBC:
+                msg = (
+                    f"can't repair wheel {wheel_filename} with {libc.name} libc to a wheel "
+                    "targeting GLIBC"
+                )
+                parser.error(msg)
+        elif plat_base.startswith("musllinux"):
+            if libc is None:
+                libc = Libc.MUSL
+            if libc != Libc.MUSL:
+                msg = (
+                    f"can't repair wheel {wheel_filename} with {libc.name} libc to a wheel "
+                    "targeting MUSL"
+                )
+                parser.error(msg)
+
+        logger.info("Repairing %s", wheel_filename)
+
+        if not wheel_dir.exists():
+            wheel_dir.mkdir(parents=True)
+
+        try:
+            wheel_abi = analyze_wheel_abi(
+                libc,
+                arch,
+                wheel_file,
+                exclude,
+                disable_isa_ext_check=args.DISABLE_ISA_EXT_CHECK,
+                allow_graft=True,
+                requested_policy_base_name=plat_base,
+            )
+        except NonPlatformWheelError as e:
+            logger.info(e.message)
+            if is_pure_python and args.ALLOW_PURE_PY_WHEEL:
+                dest_fname = wheel_dir / wheel_file.name
+                if not dest_fname.is_file() or not dest_fname.samefile(wheel_file):
+                    shutil.copy2(wheel_file, dest_fname)
+                # process next wheel
+                continue
             return 1
 
-        policy = wheel_policy.get_policy_by_name(args.PLAT)
-        reqd_tag = policy["priority"]
+        policies = wheel_abi.policies
+        if plat_base == "auto":
+            if wheel_abi.overall_policy == policies.linux:
+                # we're getting 'linux', override
+                plat = policies.lowest.name
+            else:
+                plat = wheel_abi.overall_policy.name
+        else:
+            plat = f"{plat_base}_{policies.architecture.value}"
+        requested_policy = policies.get_policy_by_name(plat)
 
-        if reqd_tag > wheel_policy.get_priority_by_name(wheel_abi.sym_tag):
+        if requested_policy > wheel_abi.sym_policy:
             msg = (
-                'cannot repair "%s" to "%s" ABI because of the presence '
-                "of too-recent versioned symbols. You'll need to compile "
-                "the wheel on an older toolchain." % (wheel_file, args.PLAT)
+                f'cannot repair "{wheel_file}" to "{plat}" ABI because of the '
+                "presence of too-recent versioned symbols. You'll need to compile "
+                "the wheel on an older toolchain."
             )
-            p.error(msg)
+            parser.error(msg)
 
-        if reqd_tag > wheel_policy.get_priority_by_name(wheel_abi.ucs_tag):
+        if requested_policy > wheel_abi.ucs_policy:
             msg = (
-                'cannot repair "%s" to "%s" ABI because it was compiled '
-                "against a UCS2 build of Python. You'll need to compile "
+                f'cannot repair "{wheel_file}" to "{plat}" ABI because it was '
+                "compiled against a UCS2 build of Python. You'll need to compile "
                 "the wheel against a wide-unicode build of Python."
-                % (wheel_file, args.PLAT)
             )
-            p.error(msg)
+            parser.error(msg)
 
-        if reqd_tag > wheel_policy.get_priority_by_name(wheel_abi.blacklist_tag):
+        if requested_policy > wheel_abi.blacklist_policy:
             msg = (
-                'cannot repair "%s" to "%s" ABI because it depends on '
-                "black-listed symbols." % (wheel_file, args.PLAT)
+                f'cannot repair "{wheel_file}" to "{plat}" ABI because it '
+                "depends on black-listed symbols."
             )
-            p.error(msg)
+            parser.error(msg)
 
-        abis = [policy["name"]] + policy["aliases"]
-        if not args.ONLY_PLAT:
-            if reqd_tag < wheel_policy.get_priority_by_name(wheel_abi.overall_tag):
-                logger.info(
-                    (
-                        "Wheel is eligible for a higher priority tag. "
-                        "You requested %s but I have found this wheel is "
-                        "eligible for %s."
-                    ),
-                    args.PLAT,
-                    wheel_abi.overall_tag,
-                )
-                higher_policy = wheel_policy.get_policy_by_name(wheel_abi.overall_tag)
-                abis = [higher_policy["name"]] + higher_policy["aliases"] + abis
+        if requested_policy > wheel_abi.machine_policy:
+            msg = (
+                f'cannot repair "{wheel_file}" to "{plat}" ABI because it '
+                "depends on unsupported ISA extensions."
+            )
+            parser.error(msg)
+
+        abis = [requested_policy.name, *requested_policy.aliases]
+        if (not args.ONLY_PLAT) and requested_policy < wheel_abi.overall_policy:
+            logger.info(
+                (
+                    "Wheel is eligible for a higher priority tag. "
+                    "You requested %s but I have found this wheel is "
+                    "eligible for %s."
+                ),
+                plat,
+                wheel_abi.overall_policy.name,
+            )
+            abis = [
+                wheel_abi.overall_policy.name,
+                *wheel_abi.overall_policy.aliases,
+                *abis,
+            ]
 
         patcher = Patchelf()
         out_wheel = repair_wheel(
-            wheel_policy,
+            wheel_abi,
             wheel_file,
             abis=abis,
             lib_sdir=args.LIB_SDIR,
-            out_dir=args.WHEEL_DIR,
+            out_dir=wheel_dir,
             update_tags=args.UPDATE_TAGS,
             patcher=patcher,
-            exclude=exclude,
             strip=args.STRIP,
+            zip_compression_level=args.ZIP_COMPRESSION_LEVEL,
         )
 
         if out_wheel is not None:
             logger.info("\nFixed-up wheel written to %s", out_wheel)
+    return 0

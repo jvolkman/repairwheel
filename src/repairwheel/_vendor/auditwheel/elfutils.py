@@ -1,41 +1,39 @@
 from __future__ import annotations
 
-from os.path import basename
-from pathlib import Path
-from typing import Iterator
+from typing import TYPE_CHECKING
 
 from elftools.common.exceptions import ELFError
 from elftools.elf.elffile import ELFFile
 
-from .lddtree import parse_ld_paths
+from repairwheel._vendor.auditwheel.lddtree import parse_ld_paths
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable, Iterator
+    from pathlib import Path
 
 
-def elf_read_dt_needed(fn: str) -> list[str]:
-    needed = []
-    with open(fn, "rb") as f:
+def elf_read_dt_needed(fn: Path) -> list[str]:
+    needed: list[str] = []
+    with fn.open("rb") as f:
         elf = ELFFile(f)
         section = elf.get_section_by_name(".dynamic")
         if section is None:
-            raise ValueError("Could not find soname in %s" % fn)
-
-        for t in section.iter_tags():
-            if t.entry.d_tag == "DT_NEEDED":
-                needed.append(t.needed)
-
+            msg = f"Could not find soname in {fn}"
+            raise ValueError(msg)
+        needed.extend(t.needed for t in section.iter_tags() if t.entry.d_tag == "DT_NEEDED")
     return needed
 
 
-def elf_file_filter(paths: Iterator[str]) -> Iterator[tuple[str, ELFFile]]:
+def elf_file_filter(paths: Iterable[Path]) -> Iterator[tuple[Path, ELFFile]]:
     """Filter through an iterator of filenames and load up only ELF
     files
     """
-
     for path in paths:
-        if path.endswith(".py"):
+        if path.name.endswith(".py"):
             continue
         else:
             try:
-                with open(path, "rb") as f:
+                with path.open("rb") as f:
                     candidate = ELFFile(f)
                     yield path, candidate
             except ELFError:
@@ -70,7 +68,7 @@ def elf_find_ucs2_symbols(elf: ELFFile) -> Iterator[str]:
                 yield sym.name
 
 
-def elf_references_PyFPE_jbuf(elf: ELFFile) -> bool:
+def elf_references_pyfpe_jbuf(elf: ELFFile) -> bool:
     offending_symbol_names = ("PyFPE_jbuf", "PyFPE_dummy", "PyFPE_counter")
     section = elf.get_section_by_name(".dynsym")
     if section is not None:
@@ -85,8 +83,8 @@ def elf_references_PyFPE_jbuf(elf: ELFFile) -> bool:
     return False
 
 
-def elf_is_python_extension(fn: str, elf: ELFFile) -> tuple[bool, int | None]:
-    modname = basename(fn).split(".", 1)[0]
+def elf_is_python_extension(fn: Path, elf: ELFFile) -> tuple[bool, int | None]:
+    modname = fn.name.split(".", 1)[0]
     module_init_f = {
         "init" + modname: 2,
         "PyInit_" + modname: 3,
@@ -108,10 +106,10 @@ def elf_is_python_extension(fn: str, elf: ELFFile) -> tuple[bool, int | None]:
     return False, None
 
 
-def elf_read_rpaths(fn: str) -> dict[str, list[str]]:
+def elf_read_rpaths(fn: Path) -> dict[str, list[str]]:
     result: dict[str, list[str]] = {"rpaths": [], "runpaths": []}
 
-    with open(fn, "rb") as f:
+    with fn.open("rb") as f:
         elf = ELFFile(f)
         section = elf.get_section_by_name(".dynamic")
         if section is None:
@@ -119,45 +117,37 @@ def elf_read_rpaths(fn: str) -> dict[str, list[str]]:
 
         for t in section.iter_tags():
             if t.entry.d_tag == "DT_RPATH":
-                result["rpaths"] = parse_ld_paths(t.rpath, root="/", path=fn)
+                result["rpaths"] = parse_ld_paths(t.rpath, root="/", path=str(fn))
             elif t.entry.d_tag == "DT_RUNPATH":
-                result["runpaths"] = parse_ld_paths(t.runpath, root="/", path=fn)
+                result["runpaths"] = parse_ld_paths(t.runpath, root="/", path=str(fn))
 
     return result
 
 
-def is_subdir(path: str | Path | None, directory: str | Path) -> bool:
-    if path is None:
-        return False
-
-    path = Path(path).resolve()
-    directory = Path(directory).resolve()
-
-    return directory in path.parents
-
-
-def get_undefined_symbols(path: str) -> set[str]:
+def get_undefined_symbols(path: Path) -> set[str]:
     undef_symbols = set()
-    with open(path, "rb") as f:
+    with path.open("rb") as f:
         elf = ELFFile(f)
         section = elf.get_section_by_name(".dynsym")
         if section is not None:
             # look for all undef symbols
+            # if the symbol is weak don't consider it as undefined, it's "optional"
             for sym in section.iter_symbols():
-                if sym["st_shndx"] == "SHN_UNDEF":
+                if sym["st_shndx"] == "SHN_UNDEF" and sym["st_info"]["bind"] != "STB_WEAK":
                     undef_symbols.add(sym.name)
     return undef_symbols
 
 
 def filter_undefined_symbols(
-    path: str, symbols: dict[str, list[str]]
+    path: Path,
+    symbols: dict[str, frozenset[str]],
 ) -> dict[str, list[str]]:
     if not symbols:
         return {}
     undef_symbols = set("*") | get_undefined_symbols(path)
     result = {}
     for lib, sym_list in symbols.items():
-        intersection = set(sym_list) & undef_symbols
+        intersection = sym_list & undef_symbols
         if intersection:
             result[lib] = sorted(intersection)
     return result

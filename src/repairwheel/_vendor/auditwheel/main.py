@@ -2,14 +2,13 @@ from __future__ import annotations
 
 import argparse
 import logging
-import os
 import pathlib
 import sys
 from importlib import metadata
+from pathlib import Path
 
 from repairwheel._vendor import auditwheel
-
-from . import main_lddtree, main_repair, main_show
+from repairwheel._vendor.auditwheel import main_lddtree, main_repair, main_show
 
 
 def main() -> int | None:
@@ -19,11 +18,13 @@ def main() -> int | None:
 
     location = pathlib.Path(auditwheel.__file__).parent.resolve()
     version = "auditwheel {} installed at {} (python {}.{})".format(
-        metadata.version("auditwheel"), location, *sys.version_info
+        metadata.version("auditwheel"),
+        location,
+        *sys.version_info,
     )
 
     p = argparse.ArgumentParser(description="Cross-distro Python wheels.")
-    p.set_defaults(prog=os.path.basename(sys.argv[0]))
+    p.set_defaults(prog=Path(sys.argv[0]).name)
     p.add_argument("-V", "--version", action="version", version=version)
     p.add_argument(
         "-v",
@@ -50,7 +51,5 @@ def main() -> int | None:
     if not hasattr(args, "func"):
         p.print_help()
         return None
-
-    rval = args.func(args, p)
-
-    return rval
+    result: int | None = args.func(args, p)
+    return result
