@@ -1,7 +1,9 @@
+import contextlib
 import os
 import subprocess
 import sys
 import tempfile
+
 import venv
 from dataclasses import dataclass
 from pathlib import Path
@@ -84,11 +86,32 @@ def is_wheel_compatible(wheel: Path) -> bool:
     return False
 
 
+@contextlib.contextmanager
+def _clean_environ():
+    """Temporarily remove PYTHONPATH from os.environ.
+
+    This prevents it from leaking into subprocesses created by standard
+    library venv/ensurepip, which causes startup crashes on standalone
+    Python distributions.
+    """
+    old_env = {}
+    for var in ["PYTHONPATH"]:
+        if var in os.environ:
+            old_env[var] = os.environ.pop(var)
+    try:
+        yield
+    finally:
+        for var, val in old_env.items():
+            os.environ[var] = val
+
+
 def check_wheel_installs_and_runs(wheel: Path) -> None:
     """Returns False if the wheel is not for the current platform."""
     with tempfile.TemporaryDirectory() as tmpdir:
-        env = venv.EnvBuilder(with_pip=True)
-        env.create(tmpdir)
+        with _clean_environ():
+            env = venv.EnvBuilder(with_pip=True)
+            env.create(tmpdir)
+
         context = env.ensure_directories(tmpdir)
         _call_new_python(context, "-m", "pip", "install", str(wheel))
         answer = _call_new_python(context, "-c", "from testwheel import testwheel; print(testwheel.get_answer())")

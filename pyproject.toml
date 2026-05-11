@@ -93,6 +93,9 @@ dependencies = [
   "pytest",
 ]
 
+[[tool.hatch.envs.test.matrix]]
+python = ["3.10", "3.11", "3.12", "3.13"]
+
 [tool.hatch.envs.test.scripts]
 test = "pytest -v tests/ --ignore tests/gen_check/"
 generate = "pytest -v tests/gen_check/test_generate.py"

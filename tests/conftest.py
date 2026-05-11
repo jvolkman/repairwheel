@@ -47,6 +47,25 @@ def patched_linux_x86_64_wheel(orig_linux_x86_64_wheel: TestWheel, patched_wheel
 
 
 @pytest.fixture(scope="session")
+def orig_linux_x86_64_musl_wheel(testwheel_root: Path) -> TestWheel:
+    tag = "cp36-abi3-linux_x86_64"
+    dir_name = "cp36-abi3-linux_x86_64_musl"
+    wheel_path = testwheel_root / dir_name / f"testwheel-0.0.1-{tag}.whl"
+    if not wheel_path.exists():
+        pytest.skip(f"Musl test wheel not found at {wheel_path}; run build-musl.sh first")
+    return TestWheel(
+        dir_name,  # use dir_name as fixture tag to avoid output dir collision
+        wheel_path,
+        testwheel_root / dir_name / "lib",
+    )
+
+
+@pytest.fixture(scope="session")
+def patched_linux_x86_64_musl_wheel(orig_linux_x86_64_musl_wheel: TestWheel, patched_wheel_area: Path) -> Path:
+    return get_patched_wheel(orig_linux_x86_64_musl_wheel, patched_wheel_area)
+
+
+@pytest.fixture(scope="session")
 def orig_macos_x86_64_wheel(testwheel_root: Path) -> TestWheel:
     tag = "cp36-abi3-macosx_10_11_x86_64"
     return TestWheel(
@@ -95,6 +114,7 @@ def patched_windows_x86_64_wheel(orig_windows_x86_64_wheel: TestWheel, patched_w
     params=[
         "patched_py3_none_any_wheel",
         "patched_linux_x86_64_wheel",
+        "patched_linux_x86_64_musl_wheel",
         "patched_macos_x86_64_wheel",
         "patched_macos_arm64_wheel",
         "patched_windows_x86_64_wheel",
