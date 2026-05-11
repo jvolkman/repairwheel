@@ -40,7 +40,7 @@ def get_wheel_platforms(wheel: Path) -> set[str]:
     for tag in tags:
         if tag.platform == "any":
             result.add("any")
-        elif tag.platform.startswith("linux") or tag.platform.startswith("manylinux"):
+        elif tag.platform.startswith("linux") or tag.platform.startswith("manylinux") or tag.platform.startswith("musllinux"):
             result.add("linux")
         elif tag.platform.startswith("macos"):
             result.add("macos")

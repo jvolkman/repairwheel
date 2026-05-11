@@ -4,7 +4,7 @@ import subprocess
 import sys
 import tempfile
 import zipfile
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -31,8 +31,24 @@ def test_wheel_installs_and_runs(patched_wheel: Path) -> None:
     check_wheel_installs_and_runs(patched_wheel)
 
 
+def test_repaired_wheel_has_proper_tag(patched_wheel: Path) -> None:
+    """Repaired wheels must carry audited platform tags, not bare 'linux_'."""
+    name = patched_wheel.name
+    if "py3-none-any" in name:
+        pytest.skip("Pure-python wheel; no platform tag to audit")
+
+    if "linux" in name:
+        assert any(
+            t in name for t in ["manylinux", "musllinux"]
+        ), f"Linux wheel should have manylinux or musllinux tag, got: {name}"
+    elif "macosx" in name:
+        assert "macosx_" in name, f"macOS wheel missing macosx tag: {name}"
+    elif "win" in name:
+        assert "win_" in name or "win32" in name, f"Windows wheel missing win tag: {name}"
+
+
 def test_source_date_epoch(orig_py3_none_any_wheel: TestWheel) -> None:
-    expected_zip_time = datetime.utcfromtimestamp(TEST_SOURCE_DATE_EPOCH).timetuple()[:6]
+    expected_zip_time = datetime.fromtimestamp(TEST_SOURCE_DATE_EPOCH, timezone.utc).timetuple()[:6]
     with tempfile.TemporaryDirectory(prefix="testwheel") as temp_dir:
         temp_dir = Path(temp_dir)
         patched_wheel = get_patched_wheel(

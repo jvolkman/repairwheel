@@ -1,13 +1,67 @@
+from __future__ import annotations
+
 import logging
+import os
+import re
 import zlib
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from packaging.utils import parse_wheel_filename
 
 from . import monkeypatch
 from . import patcher
 
+if TYPE_CHECKING:
+    from repairwheel._vendor.auditwheel.libc import Libc
+
 log = logging.getLogger(__name__)
+
+
+def _detect_libc_and_musl_policy(
+    wheel_file: Path,
+) -> tuple[Libc | None, str | None]:
+    """Determine the target libc and musl policy from available signals.
+
+    Detection order:
+    1. AUDITWHEEL_PLAT environment variable
+    2. Wheel filename platform tags
+    3. None (let ELF inspection in get_wheel_elfdata determine libc)
+    """
+    # 1. Check AUDITWHEEL_PLAT environment variable
+    auditwheel_plat = os.environ.get("AUDITWHEEL_PLAT", "")
+    result = _parse_platform_for_libc(auditwheel_plat)
+    if result is not None:
+        return result
+
+    # 2. Check wheel filename tags
+    _, _, _, tags = parse_wheel_filename(wheel_file.name)
+    for tag in tags:
+        result = _parse_platform_for_libc(tag.platform)
+        if result is not None:
+            return result
+
+    # 3. No explicit signal; let ELF inspection determine libc
+    return None, None
+
+
+def _parse_platform_for_libc(
+    platform: str,
+) -> tuple[Libc, str | None] | None:
+    """Parse a platform string to extract libc type and musl policy.
+
+    Returns (Libc, musl_policy) or None if the platform doesn't indicate a libc.
+    """
+    from repairwheel._vendor.auditwheel.libc import Libc
+
+    m = re.match(r"(musllinux_\d+_\d+)", platform)
+    if m:
+        return Libc.MUSL, m.group(1)
+
+    if platform.startswith("manylinux"):
+        return Libc.GLIBC, None
+
+    return None
 
 
 def get_machine_from_wheel(wheel: Path) -> str:
@@ -38,16 +92,19 @@ def repair(wheel_file: Path, output_dir: Path, lib_path: list[Path], use_sys_pat
     monkeypatch.patch_load_ld_paths(lib_path, use_sys_paths)
 
     from repairwheel._vendor.auditwheel.architecture import Architecture
-    from repairwheel._vendor.auditwheel.error import NonPlatformWheelError
-    from repairwheel._vendor.auditwheel.libc import Libc
+    from repairwheel._vendor.auditwheel.error import InvalidLibcError, NonPlatformWheelError
     from repairwheel._vendor.auditwheel.repair import repair_wheel
     from repairwheel._vendor.auditwheel.wheel_abi import analyze_wheel_abi
 
     arch = Architecture(target_machine)
+    libc, musl_policy = _detect_libc_and_musl_policy(wheel_file)
+    log.info("Detected libc=%s, musl_policy=%s", libc, musl_policy)
+
+    monkeypatch.patch_libc_detection(libc, musl_policy)
 
     try:
         winfo = analyze_wheel_abi(
-            Libc.GLIBC,
+            libc,
             arch,
             wheel_file,
             frozenset(),
@@ -56,6 +113,12 @@ def repair(wheel_file: Path, output_dir: Path, lib_path: list[Path], use_sys_pat
         )
     except NonPlatformWheelError as e:
         log.info(e.message)
+        return
+    except InvalidLibcError:
+        log.warning(
+            'Could not detect libc for wheel "%s". ' "Extensions may be statically linked. " "Skipping repair.",
+            wheel_file.name,
+        )
         return
 
     policies = winfo.policies

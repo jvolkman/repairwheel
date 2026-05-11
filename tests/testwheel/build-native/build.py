@@ -31,9 +31,10 @@ class BuildInfo:
     dep_name: str
     ext_cflags: list[str]
     ext_name: str
-    python_url: str
+    python_url: str | None = None
     app_cflags: list[str] | None = None
     app_name: str | None = None
+    output_dir_name: str | None = None  # defaults to tag if not set
 
 
 LINUX_X86_64_BUILD = BuildInfo(
@@ -46,6 +47,21 @@ LINUX_X86_64_BUILD = BuildInfo(
     python_url="https://github.com/indygreg/python-build-standalone/releases/download/20230116/cpython-3.10.9+20230116-x86_64-unknown-linux-gnu-install_only.tar.gz",
     app_cflags=["-I{testdep}", "-L{lib}", "-ltestdep"],
     app_name="testapp",
+)
+
+# Musl build: uses linux_x86_64 tag intentionally (not musllinux) so
+# tests can verify that ELF-based libc detection works without relying
+# on the wheel filename.  Must be built via build-musl.sh (Docker),
+# not directly through this script's CLI.  Only build_wheel() fields
+# are needed here; the shell script handles compilation.
+LINUX_X86_64_MUSL_BUILD = BuildInfo(
+    target="x86_64-linux-musl",
+    tag="cp36-abi3-linux_x86_64",
+    dep_cflags=["-shared", "-Wl,-soname,libtestdep.so"],
+    dep_name="libtestdep.so",
+    ext_cflags=[],
+    ext_name=f"{WHEEL_NAME}.abi3.so",
+    output_dir_name="cp36-abi3-linux_x86_64_musl",
 )
 
 
@@ -108,6 +124,10 @@ WINDOWS_X86_64_BUILD = BuildInfo(
 
 
 def fetch_python(build_info: BuildInfo, build_dir: Path) -> Path:
+    if not build_info.python_url:
+        raise RuntimeError(
+            f"Target {build_info.target!r} has no python_url; " f"use build-musl.sh instead of building directly."
+        )
     urllib.request.urlretrieve(build_info.python_url, str(build_dir / "python.tgz"))
     python_dir = build_dir / "python"
     with tarfile.open(build_dir / "python.tgz") as tf:
@@ -235,7 +255,7 @@ def build(build_info: BuildInfo, build_dir: Path, out_dir: Path):
 
     testdep_file = build_testdep(build_info, build_dir)
     lib_dir = testdep_file.parent
-    out_dir = out_dir / build_info.tag
+    out_dir = out_dir / (build_info.output_dir_name or build_info.tag)
     out_lib_dir = out_dir / "lib"
     out_lib_dir.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(testdep_file, out_lib_dir / testdep_file.name)

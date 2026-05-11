@@ -158,7 +158,7 @@ def _build_ext(src_dir: Path, build_dir: Path, lib_dir: Path) -> Path:
         "-Wl,--no-as-needed",
         "-ltestdep_syslib",
     ]
-    if pylib:
+    if pylib and Path(libdir, f"lib{pylib}.so").exists():
         link_args.append(f"-l{pylib}")
     link_args += [
         f"-Wl,-rpath,{lib_dir}",
@@ -296,9 +296,11 @@ class TestSyslibRepair:
         dep_entries = [n for n in libs_entries if "testdep_syslib" in n]
         assert dep_entries, f"Expected libtestdep_syslib in .libs/, got: {libs_entries}"
 
-    def test_repaired_wheel_has_manylinux_tag(self, repaired_wheel: Path):
-        """The repaired wheel should be tagged manylinux, not plain linux."""
-        assert "manylinux" in repaired_wheel.name, f"Expected manylinux tag in: {repaired_wheel.name}"
+    def test_repaired_wheel_is_tagged(self, repaired_wheel: Path):
+        """The repaired wheel should be tagged with an audited tag, not plain linux."""
+        assert any(
+            t in repaired_wheel.name for t in ["manylinux", "musllinux"]
+        ), f"Expected manylinux or musllinux tag in: {repaired_wheel.name}"
 
     def test_repair_is_idempotent(self, syslib_env: dict[str, Path], repaired_wheel: Path, tmp_path: Path):
         """repair(repair(wheel)) must produce a byte-identical wheel."""
