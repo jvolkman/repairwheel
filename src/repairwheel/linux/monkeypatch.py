@@ -31,6 +31,10 @@ def patch_load_ld_paths(lib_paths: list[Path], use_sys_paths: bool) -> None:
     repairwheel._vendor.auditwheel.lddtree.load_ld_paths = load_ld_paths
 
 
+_original_libc_detect = None
+_original_wheel_policies_init = None
+
+
 def patch_libc_detection(libc: Libc | None, musl_policy: str | None) -> None:
     """Monkeypatch vendored auditwheel to avoid host-based libc detection.
 
@@ -46,8 +50,25 @@ def patch_libc_detection(libc: Libc | None, musl_policy: str | None) -> None:
     When *libc* is MUSL and *musl_policy* is given, WheelPolicies.__init__
     is also patched to inject the musl_policy so the correct musllinux
     version is used without querying the host musl binary.
+
+    Safe to call repeatedly (e.g. when repairing multiple wheels in one
+    invocation): originals are saved on first call and restored before
+    each new patch to prevent wrapper stacking.
     """
+    global _original_libc_detect, _original_wheel_policies_init
+
     from repairwheel._vendor.auditwheel.libc import Libc as _Libc
+    from repairwheel._vendor.auditwheel.architecture import Architecture
+    from repairwheel._vendor.auditwheel.policy import WheelPolicies
+
+    # Save originals on first call.
+    if _original_libc_detect is None:
+        _original_libc_detect = _Libc.detect
+    if _original_wheel_policies_init is None:
+        _original_wheel_policies_init = WheelPolicies.__init__
+
+    # Always restore originals before patching so wrappers don't stack.
+    WheelPolicies.__init__ = _original_wheel_policies_init  # type: ignore[method-assign]
 
     # Patch Libc.detect to return the known libc (or MUSL as the default
     # fallback) instead of probing the host.
@@ -61,15 +82,11 @@ def patch_libc_detection(libc: Libc | None, musl_policy: str | None) -> None:
 
     # Patch WheelPolicies.__init__ to inject musl_policy when not provided.
     if libc == _Libc.MUSL and musl_policy is not None:
-        from repairwheel._vendor.auditwheel.architecture import Architecture
-        from repairwheel._vendor.auditwheel.policy import WheelPolicies
-
-        original_init = WheelPolicies.__init__
         _musl_policy_override = musl_policy
 
         def _patched_init(self: WheelPolicies, *, libc: _Libc, arch: Architecture, musl_policy: str | None = None) -> None:  # type: ignore[no-redef]
             if libc == _Libc.MUSL and musl_policy is None:
                 musl_policy = _musl_policy_override
-            original_init(self, libc=libc, arch=arch, musl_policy=musl_policy)
+            _original_wheel_policies_init(self, libc=libc, arch=arch, musl_policy=musl_policy)
 
         WheelPolicies.__init__ = _patched_init  # type: ignore[method-assign]
