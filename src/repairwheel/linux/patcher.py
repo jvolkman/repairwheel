@@ -30,6 +30,11 @@ class RepairWheelElfPatcher:
             ef = ElfFile(f)
             ef.rewrite(new_rpath=rpath.encode("utf-8"))
 
+    def clear_rpath(self, file_name: str) -> None:
+        with open(file_name, "r+b") as f:
+            ef = ElfFile(f)
+            ef.rewrite(new_rpath=b"")
+
     def get_rpath(self, file_name: str) -> str:
         with open(file_name, "r+b") as f:
             ef = ElfFile(f)

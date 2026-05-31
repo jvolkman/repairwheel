@@ -84,9 +84,16 @@ def patch_libc_detection(libc: Libc | None, musl_policy: str | None) -> None:
     if libc == _Libc.MUSL and musl_policy is not None:
         _musl_policy_override = musl_policy
 
-        def _patched_init(self: WheelPolicies, *, libc: _Libc, arch: Architecture, musl_policy: str | None = None) -> None:  # type: ignore[no-redef]
+        def _patched_init(
+            self: WheelPolicies,
+            *,
+            libc: _Libc,
+            arch: Architecture,
+            musl_policy: str | None = None,
+            wheel_fn: str | None = None,
+        ) -> None:  # type: ignore[no-redef]
             if libc == _Libc.MUSL and musl_policy is None:
                 musl_policy = _musl_policy_override
-            _original_wheel_policies_init(self, libc=libc, arch=arch, musl_policy=musl_policy)
+            _original_wheel_policies_init(self, libc=libc, arch=arch, musl_policy=musl_policy, wheel_fn=wheel_fn)
 
         WheelPolicies.__init__ = _patched_init  # type: ignore[method-assign]
