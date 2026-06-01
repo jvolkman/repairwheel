@@ -1037,8 +1037,8 @@ class ElfFile:
             cur_rpath = cur_runpath
 
         # If new values weren't specified, we'll rewrite the current values.
-        new_soname = new_soname or cur_soname
-        new_rpath = new_rpath or cur_rpath
+        new_soname = new_soname if new_soname is not None else cur_soname
+        new_rpath = new_rpath if new_rpath is not None else cur_rpath
 
         # Update our DT_NEEDED and DT_VERNEED lists
         new_needed_names = [needed_replacements.get(e, e) for e in cur_needed_names if e not in needed_removals]
