@@ -29,13 +29,23 @@ def _dist_normalized_name(name: str) -> str:
     return normal_name.replace("-", "_")
 
 
+def _get_dist_info_dir(wheel_zip: ZipFile) -> str:
+    for name in wheel_zip.namelist():
+        parts = name.split("/")
+        if len(parts) > 1 and parts[0].endswith(".dist-info"):
+            return parts[0]
+
+    wheel_name = Path(wheel_zip.filename).name
+    dist_name, dist_version, _, _ = parse_wheel_filename(wheel_name)
+    dist_name = _dist_normalized_name(dist_name)
+    return f"{dist_name}-{dist_version}.dist-info"
+
+
 def _sorted_zip_entries(file: ZipFile) -> list[ZipInfo]:
     # Sort zip entries lexicographically, and place dist-info files at the end as suggested by PEP-427.
     # Filters out the RECORD file which we'll re-generate at the end.
-    wheel_name = Path(file.filename).name
-    dist_name, dist_version, _, _ = parse_wheel_filename(wheel_name)
-    dist_name = _dist_normalized_name(dist_name)
-    dist_info_prefix = f"{dist_name}-{dist_version}.dist-info/"
+    # Find the actual dist-info directory name in the zip
+    dist_info_prefix = f"{_get_dist_info_dir(file)}/"
 
     skip_files = {
         f"{dist_info_prefix}RECORD",  # Skip the record file; we'll write our own.
@@ -124,8 +134,8 @@ def write_canonical_wheel(
         mtime = DEFAULT_MTIME
 
     out_wheel = out_dir / patched_wheel.name
-    dist_name, dist_version, _, _ = parse_wheel_filename(patched_wheel.name)
-    dist_name = _dist_normalized_name(dist_name)
+    with ZipFile(patched_wheel) as patched_wheel_zip:
+        dist_info_dir = _get_dist_info_dir(patched_wheel_zip)
 
     original_modes = _gather_original_file_modes(original_wheel)
 
@@ -160,7 +170,7 @@ def write_canonical_wheel(
                     records.append((patched_info.filename, hash, size))
 
         # Write a new RECORD file at the end.
-        record_name = f"{dist_name}-{dist_version}.dist-info/RECORD"
+        record_name = f"{dist_info_dir}/RECORD"
         record_info = new_info(record_name)
 
         record_buf = StringIO(newline="\n")

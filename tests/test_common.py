@@ -94,3 +94,50 @@ def test_repair_is_idempotent(patched_wheel: Path) -> None:
         assert (
             patched_wheel.read_bytes() == re_patched[0].read_bytes()
         ), "Repairing an already-repaired wheel produced different output"
+
+
+def test_mixed_case_dist_info_preserved() -> None:
+    from repairwheel.wheel import write_canonical_wheel
+    import tempfile
+    import zipfile
+    import shutil
+    from pathlib import Path
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir_path = Path(tmpdir)
+        wheel_name = "TestPackage-1.0.0-py3-none-any.whl"
+
+        # Create a dummy original wheel
+        orig_wheel_path = tmpdir_path / wheel_name
+        with zipfile.ZipFile(orig_wheel_path, "w") as z:
+            metadata_content = b"Metadata-Version: 2.1\nName: TestPackage\nVersion: 1.0.0\n"
+            z.writestr("TestPackage-1.0.0.dist-info/METADATA", metadata_content)
+            z.writestr("TestPackage-1.0.0.dist-info/RECORD", b"TestPackage-1.0.0.dist-info/METADATA,,\n")
+            z.writestr("testpackage/__init__.py", b"# test\n")
+
+        # For our test, patched wheel can be the same as original since we are testing write_canonical_wheel
+        patched_wheel_dir = tmpdir_path / "patched"
+        patched_wheel_dir.mkdir()
+        patched_wheel_path = patched_wheel_dir / wheel_name
+        shutil.copyfile(orig_wheel_path, patched_wheel_path)
+
+        out_dir = tmpdir_path / "out"
+        out_dir.mkdir()
+
+        # Run write_canonical_wheel
+        out_wheel = write_canonical_wheel(orig_wheel_path, patched_wheel_path, out_dir)
+
+        # Verify output wheel
+        with zipfile.ZipFile(out_wheel, "r") as z:
+            namelist = z.namelist()
+
+        assert "TestPackage-1.0.0.dist-info/METADATA" in namelist
+        assert "TestPackage-1.0.0.dist-info/RECORD" in namelist
+
+        # We expect NO lowercase dist-info
+        assert not any(name.startswith("testpackage-1.0.0.dist-info") for name in namelist)
+
+        # We expect exactly one RECORD file
+        record_files = [name for name in namelist if name.endswith("/RECORD")]
+        assert len(record_files) == 1
+        assert record_files[0] == "TestPackage-1.0.0.dist-info/RECORD"
