@@ -125,9 +125,7 @@ def write_canonical_wheel(
     * File and directory entries are lexicographically ordered
     * File data is written in the same order as corresponding names
     * All timestamps are set to a constant value
-
-    Because Windows doesn't support posix file modes, we use corresponding modes in the original file if they exist.
-    Else we use the default mode.
+    * File modes are normalized to 0o755 for directories and executables, 0o644 for regular files, and 0o777 for symlinks
     """
     if mtime is None:
         mtime = DEFAULT_MTIME
@@ -145,22 +143,19 @@ def write_canonical_wheel(
         result = ZipInfo(filename, mtime_args)
         result.create_system = 3  # Always set the create system to be 'unixy'
 
-        orig_mode = original_modes.get(filename, (patched_info.external_attr >> 16) & 0xFFFF)
+        orig_mode = original_modes.get(filename)
 
-        is_dir = patched_info.is_dir()
-        is_symlink = stat.S_ISLNK(orig_mode)
-        is_exec = bool(orig_mode & 0o111)
-
-        if is_dir:
+        if patched_info.is_dir():
             result.file_size = 0
             result.external_attr = (stat.S_IFDIR | 0o755) << 16
             result.external_attr |= 0x10  # MS-DOS directory flag
-        elif is_symlink:
+        elif orig_mode is not None and stat.S_ISLNK(orig_mode):
             result.file_size = patched_info.file_size
             result.external_attr = (stat.S_IFLNK | 0o777) << 16
         else:
             result.file_size = patched_info.file_size
             result.compress_type = compression
+            is_exec = bool(orig_mode & 0o111) if orig_mode is not None else False
             perms = 0o755 if is_exec else 0o644
             result.external_attr = (stat.S_IFREG | perms) << 16
 

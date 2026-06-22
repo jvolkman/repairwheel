@@ -1,14 +1,17 @@
 import os
 import platform
+import stat
 import subprocess
 import sys
 import tempfile
+import shutil
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
 
+from repairwheel.wheel import write_canonical_wheel
 from .util import check_wheel_installs_and_runs, get_patched_wheel, is_wheel_compatible, TestWheel
 
 TEST_SOURCE_DATE_EPOCH = 1234567890
@@ -97,12 +100,6 @@ def test_repair_is_idempotent(patched_wheel: Path) -> None:
 
 
 def test_mixed_case_dist_info_preserved() -> None:
-    from repairwheel.wheel import write_canonical_wheel
-    import tempfile
-    import zipfile
-    import shutil
-    from pathlib import Path
-
     with tempfile.TemporaryDirectory() as tmpdir:
         tmpdir_path = Path(tmpdir)
         wheel_name = "TestPackage-1.0.0-py3-none-any.whl"
@@ -144,13 +141,6 @@ def test_mixed_case_dist_info_preserved() -> None:
 
 
 def test_canonical_wheel_permissions() -> None:
-    from repairwheel.wheel import write_canonical_wheel
-    import tempfile
-    import zipfile
-    import shutil
-    from pathlib import Path
-    import stat
-
     with tempfile.TemporaryDirectory() as tmpdir:
         tmpdir_path = Path(tmpdir)
         wheel_name = "test_perms-1.0.0-py3-none-any.whl"
