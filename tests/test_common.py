@@ -141,3 +141,65 @@ def test_mixed_case_dist_info_preserved() -> None:
         record_files = [name for name in namelist if name.endswith("/RECORD")]
         assert len(record_files) == 1
         assert record_files[0] == "TestPackage-1.0.0.dist-info/RECORD"
+
+
+def test_canonical_wheel_permissions() -> None:
+    from repairwheel.wheel import write_canonical_wheel
+    import tempfile
+    import zipfile
+    import shutil
+    from pathlib import Path
+    import stat
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir_path = Path(tmpdir)
+        wheel_name = "test_perms-1.0.0-py3-none-any.whl"
+
+        # Create a dummy original wheel
+        orig_wheel_path = tmpdir_path / wheel_name
+        with zipfile.ZipFile(orig_wheel_path, "w") as z:
+            # Create a directory with weird perms
+            dir_info = zipfile.ZipInfo("my_dir/")
+            dir_info.external_attr = (stat.S_IFDIR | 0o777) << 16
+            z.writestr(dir_info, b"")
+
+            # Create a regular file with weird perms
+            file_info = zipfile.ZipInfo("my_dir/file.txt")
+            file_info.external_attr = (stat.S_IFREG | 0o666) << 16
+            z.writestr(file_info, b"content")
+
+            # Create an executable file with weird perms
+            exec_info = zipfile.ZipInfo("my_dir/script.sh")
+            exec_info.external_attr = (stat.S_IFREG | 0o777) << 16
+            z.writestr(exec_info, b"echo hello")
+
+            # Create a symlink with weird perms
+            symlink_info = zipfile.ZipInfo("my_dir/symlink.txt")
+            symlink_info.external_attr = (stat.S_IFLNK | 0o755) << 16
+            z.writestr(symlink_info, b"file.txt")
+
+            metadata_content = b"Metadata-Version: 2.1\nName: test-perms\nVersion: 1.0.0\n"
+            z.writestr("test_perms-1.0.0.dist-info/METADATA", metadata_content)
+
+        patched_wheel_dir = tmpdir_path / "patched"
+        patched_wheel_dir.mkdir()
+        patched_wheel_path = patched_wheel_dir / wheel_name
+        shutil.copyfile(orig_wheel_path, patched_wheel_path)
+
+        out_dir = tmpdir_path / "out"
+        out_dir.mkdir()
+
+        out_wheel = write_canonical_wheel(orig_wheel_path, patched_wheel_path, out_dir)
+
+        # Verify output wheel permissions
+        with zipfile.ZipFile(out_wheel, "r") as z:
+            infos = {i.filename: i for i in z.infolist()}
+
+        assert infos["my_dir/"].external_attr == ((stat.S_IFDIR | 0o755) << 16) | 0x10
+        assert infos["my_dir/file.txt"].external_attr == (stat.S_IFREG | 0o644) << 16
+        assert infos["my_dir/script.sh"].external_attr == (stat.S_IFREG | 0o755) << 16
+        assert infos["my_dir/symlink.txt"].external_attr == (stat.S_IFLNK | 0o777) << 16
+
+        # Verify RECORD file was created and has 0o644
+        assert "test_perms-1.0.0.dist-info/RECORD" in infos
+        assert infos["test_perms-1.0.0.dist-info/RECORD"].external_attr == (stat.S_IFREG | 0o644) << 16
