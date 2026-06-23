@@ -3,6 +3,7 @@ import csv
 import hashlib
 import operator
 import os
+import stat
 import zipfile
 from datetime import datetime
 from io import StringIO
@@ -116,8 +117,6 @@ def write_canonical_wheel(
     original_wheel: Path,
     patched_wheel: Path,
     out_dir: Path,
-    default_file_mode: int = 0o664,
-    default_dir_mode: int = 0o775,
     mtime: datetime | None = None,
     compression: int = zipfile.ZIP_DEFLATED,
 ) -> Path:
@@ -126,9 +125,7 @@ def write_canonical_wheel(
     * File and directory entries are lexicographically ordered
     * File data is written in the same order as corresponding names
     * All timestamps are set to a constant value
-
-    Because Windows doesn't support posix file modes, we use corresponding modes in the original file if they exist.
-    Else we use the default mode.
+    * File modes are normalized to 0o755 for directories and executables, 0o644 for regular files, and 0o777 for symlinks
     """
     if mtime is None:
         mtime = DEFAULT_MTIME
@@ -141,37 +138,46 @@ def write_canonical_wheel(
 
     mtime_args = mtime.timetuple()[:6]
 
-    def new_info(filename: str, is_dir: bool = False) -> ZipInfo:
+    def new_info(patched_info: ZipInfo) -> ZipInfo:
+        filename = patched_info.filename
         result = ZipInfo(filename, mtime_args)
         result.create_system = 3  # Always set the create system to be 'unixy'
-        result.file_size = 0  # Caller should set this for files
-        if is_dir:
-            mode = original_modes.get(filename, default_dir_mode)
-            result.external_attr = (mode & 0xFFFF) << 16
+
+        orig_mode = original_modes.get(filename)
+
+        if patched_info.is_dir():
+            result.file_size = 0
+            result.external_attr = (stat.S_IFDIR | 0o755) << 16
             result.external_attr |= 0x10  # MS-DOS directory flag
+        elif orig_mode is not None and stat.S_ISLNK(orig_mode):
+            result.file_size = patched_info.file_size
+            result.external_attr = (stat.S_IFLNK | 0o777) << 16
         else:
+            result.file_size = patched_info.file_size
             result.compress_type = compression
-            mode = original_modes.get(filename, default_file_mode)
-            result.external_attr = (mode & 0xFFFF) << 16
+            is_exec = bool(orig_mode & 0o111) if orig_mode is not None else False
+            perms = 0o755 if is_exec else 0o644
+            result.external_attr = (stat.S_IFREG | perms) << 16
 
         return result
 
     with ZipFile(patched_wheel) as patched_wheel_zip, ZipFile(out_wheel, mode="w", compression=compression) as out_wheel_zip:
         records = []
         for patched_info in _sorted_zip_entries(patched_wheel_zip):
+            out_info = new_info(patched_info)
             if patched_info.is_dir():
-                out_info = new_info(patched_info.filename, True)
                 out_wheel_zip.writestr(out_info, b"")
             else:
-                out_info = new_info(patched_info.filename)
-                out_info.file_size = patched_info.file_size
                 with patched_wheel_zip.open(patched_info) as in_file, out_wheel_zip.open(out_info, "w") as out_file:
                     hash, size = _copy_and_hash(in_file, out_file)
                     records.append((patched_info.filename, hash, size))
 
         # Write a new RECORD file at the end.
         record_name = f"{dist_info_dir}/RECORD"
-        record_info = new_info(record_name)
+        record_info = ZipInfo(record_name, mtime_args)
+        record_info.create_system = 3
+        record_info.compress_type = compression
+        record_info.external_attr = (stat.S_IFREG | 0o644) << 16
 
         record_buf = StringIO(newline="\n")
         record_writer = csv.writer(record_buf, delimiter=",", quotechar='"', lineterminator="\n")
