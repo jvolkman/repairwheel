@@ -87,7 +87,14 @@ def get_machine_from_wheel(wheel: Path) -> str:
     return plat.rsplit("_", 1)[-1]
 
 
-def repair(wheel_file: Path, output_dir: Path, lib_path: list[Path], use_sys_paths: bool, verbosity: int = 0) -> None:
+def repair(
+    wheel_file: Path,
+    output_dir: Path,
+    lib_path: list[Path],
+    use_sys_paths: bool,
+    exclude: list[str],
+    verbosity: int = 0,
+) -> None:
     target_machine = get_machine_from_wheel(wheel_file)
     monkeypatch.patch_load_ld_paths(lib_path, use_sys_paths)
 
@@ -107,7 +114,7 @@ def repair(wheel_file: Path, output_dir: Path, lib_path: list[Path], use_sys_pat
             libc,
             arch,
             wheel_file,
-            frozenset(),
+            frozenset(exclude),
             disable_isa_ext_check=False,
             allow_graft=True,
         )

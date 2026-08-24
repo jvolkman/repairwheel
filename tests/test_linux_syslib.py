@@ -208,7 +208,7 @@ def _make_wheel(ext_file: Path, out_dir: Path) -> Path:
     return wheel_path
 
 
-def _run_repairwheel(wheel: Path, lib_dir: Path, out_dir: Path) -> Path:
+def _run_repairwheel(wheel: Path, lib_dir: Path, out_dir: Path, exclude: list[str] | None = None) -> Path:
     """Run ``python -m repairwheel`` on *wheel*, return the repaired path."""
     result = subprocess.run(
         [
@@ -220,6 +220,7 @@ def _run_repairwheel(wheel: Path, lib_dir: Path, out_dir: Path) -> Path:
             str(out_dir),
             "--lib-dir",
             str(lib_dir),
+            *[argument for pattern in exclude or [] for argument in ("--exclude", pattern)],
         ],
         env={**os.environ},
         capture_output=True,
@@ -301,6 +302,17 @@ class TestSyslibRepair:
         assert any(
             t in repaired_wheel.name for t in ["manylinux", "musllinux"]
         ), f"Expected manylinux or musllinux tag in: {repaired_wheel.name}"
+
+    def test_exclude_prevents_bundling(self, syslib_env: dict[str, Path], tmp_path: Path):
+        repaired_wheel = _run_repairwheel(
+            syslib_env["wheel"],
+            syslib_env["lib_dir"],
+            tmp_path / "excluded",
+            exclude=["libtestdep_syslib.so"],
+        )
+
+        with zipfile.ZipFile(repaired_wheel) as zf:
+            assert not any("testdep_syslib" in name for name in zf.namelist())
 
     def test_repair_is_idempotent(self, syslib_env: dict[str, Path], repaired_wheel: Path, tmp_path: Path):
         """repair(repair(wheel)) must produce a byte-identical wheel."""
