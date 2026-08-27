@@ -4,7 +4,9 @@ import sys
 from pathlib import Path
 
 
-def repair(wheel: Path, output_path: Path, lib_path: list[Path], use_sys_paths: bool, verbosity: int = 0) -> None:
+def repair(
+    wheel: Path, output_path: Path, lib_path: list[Path], use_sys_paths: bool, _exclude: list[str], verbosity: int = 0
+) -> None:
     orig_env_path = os.environ["PATH"]
     if not use_sys_paths:
         os.environ["PATH"] = ""
