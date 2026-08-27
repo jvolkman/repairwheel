@@ -23,15 +23,22 @@ The final result _should_ be bitwise-identitcal regardless of the system used to
 ## Usage
 
 ```
-usage: repairwheel [-h] -o OUTPUT_DIR [-l LIB_DIR] wheel
+usage: repairwheel [-h] -o OUTPUT_DIR [-l LIB_DIR] [-e EXCLUDE]
+                   [--no-sys-paths] [-V]
+                   wheels [wheels ...]
 
 positional arguments:
-  wheel
+  wheels                wheel file(s) to repair, supports glob patterns)
 
 options:
   -h, --help            show this help message and exit
-  -o OUTPUT_DIR, --output-dir OUTPUT_DIR
-  -l LIB_DIR, --lib-dir LIB_DIR
+  -o, --output-dir OUTPUT_DIR
+  -l, --lib-dir LIB_DIR
+  -e, --exclude EXCLUDE
+                        library name or glob pattern to exclude from wheel
+                        repair; may be repeated
+  --no-sys-paths        do not search libraries in system paths
+  -V, --version         show program's version number and exit
 ```
 
 ## Example

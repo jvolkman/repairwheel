@@ -5,9 +5,14 @@ from pathlib import Path
 
 
 def repair(
-    wheel: Path, output_path: Path, lib_path: list[Path], use_sys_paths: bool, _exclude: list[str], verbosity: int = 0
+    wheel: Path,
+    output_path: Path,
+    lib_path: list[Path],
+    use_sys_paths: bool,
+    exclude: list[str] | None = None,
+    verbosity: int = 0,
 ) -> None:
-    orig_env_path = os.environ["PATH"]
+    orig_env_path = os.environ.get("PATH")
     if not use_sys_paths:
         os.environ["PATH"] = ""
 
@@ -22,6 +27,9 @@ def repair(
             str(output_path),
             "--no-diagnostic",
         ]
+
+        for pat in exclude or []:
+            args.extend(["--no-dll", pat])
 
         if lib_path:
             args.extend(

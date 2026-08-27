@@ -314,6 +314,17 @@ class TestSyslibRepair:
         with zipfile.ZipFile(repaired_wheel) as zf:
             assert not any("testdep_syslib" in name for name in zf.namelist())
 
+    def test_exclude_glob_prevents_bundling(self, syslib_env: dict[str, Path], tmp_path: Path):
+        repaired_wheel = _run_repairwheel(
+            syslib_env["wheel"],
+            syslib_env["lib_dir"],
+            tmp_path / "excluded_glob",
+            exclude=["*testdep*"],
+        )
+
+        with zipfile.ZipFile(repaired_wheel) as zf:
+            assert not any("testdep_syslib" in name for name in zf.namelist())
+
     def test_repair_is_idempotent(self, syslib_env: dict[str, Path], repaired_wheel: Path, tmp_path: Path):
         """repair(repair(wheel)) must produce a byte-identical wheel."""
         out2 = tmp_path / "repaired2"

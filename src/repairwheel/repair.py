@@ -33,7 +33,7 @@ def make_parser() -> argparse.ArgumentParser:
         "--exclude",
         action="append",
         default=[],
-        help="Linux SONAME glob to exclude from wheel repair; may be repeated",
+        help="library name or glob pattern to exclude from wheel repair; may be repeated",
     )
     parser.add_argument("--no-sys-paths", action="store_true", help="do not search libraries in system paths")
     parser.add_argument("-V", "--version", action="version", version=__version__)
@@ -67,7 +67,12 @@ def find_written_wheel(wheel_dir: Path) -> Path:
 
 
 def noop_repair(
-    wheel: Path, output_path: Path, _lib_path: list[Path], _use_sys_paths: bool, _exclude: list[str], _verbosity: int = 0
+    wheel: Path,
+    output_path: Path,
+    _lib_path: list[Path],
+    _use_sys_paths: bool,
+    _exclude: list[str] | None = None,
+    _verbosity: int = 0,
 ) -> None:
     # Simply copy the input wheel to the output directory.
     copied_location = output_path / wheel.name
@@ -121,9 +126,6 @@ def main():
 
         with tempfile.TemporaryDirectory(prefix="repairwheel") as temp_wheel_dir:
             temp_wheel_dir = Path(temp_wheel_dir)
-            if args.exclude and platform != "linux":
-                fatal("--exclude is currently supported only for Linux wheels")
-
             fn(original_wheel, temp_wheel_dir, lib_path, use_sys_paths, args.exclude)
             patched_wheel = find_written_wheel(temp_wheel_dir)
 
