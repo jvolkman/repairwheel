@@ -193,3 +193,36 @@ def test_canonical_wheel_permissions() -> None:
         # Verify RECORD file was created and has 0o644
         assert "test_perms-1.0.0.dist-info/RECORD" in infos
         assert infos["test_perms-1.0.0.dist-info/RECORD"].external_attr == (stat.S_IFREG | 0o644) << 16
+
+
+def test_parser_exclude_options():
+    from repairwheel.repair import make_parser
+
+    parser = make_parser()
+    args = parser.parse_args(["wheel.whl", "-o", "/tmp/out"])
+    assert args.exclude == []
+
+    args = parser.parse_args(["wheel.whl", "-o", "/tmp/out", "-e", "lib1.so", "--exclude", "lib2.dylib"])
+    assert args.exclude == ["lib1.so", "lib2.dylib"]
+
+
+def test_pure_wheel_accepts_exclude(orig_py3_none_any_wheel: TestWheel, tmp_path: Path):
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "repairwheel",
+            str(orig_py3_none_any_wheel.wheel),
+            "--output-dir",
+            str(out_dir),
+            "--exclude",
+            "something.so",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, f"repairwheel failed:\n{result.stdout}\n{result.stderr}"
+    wheels = list(out_dir.glob("*.whl"))
+    assert len(wheels) == 1

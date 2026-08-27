@@ -92,7 +92,7 @@ def repair(
     output_dir: Path,
     lib_path: list[Path],
     use_sys_paths: bool,
-    exclude: list[str],
+    exclude: list[str] | None = None,
     verbosity: int = 0,
 ) -> None:
     target_machine = get_machine_from_wheel(wheel_file)
@@ -114,7 +114,7 @@ def repair(
             libc,
             arch,
             wheel_file,
-            frozenset(exclude),
+            frozenset(exclude or ()),
             disable_isa_ext_check=False,
             allow_graft=True,
         )

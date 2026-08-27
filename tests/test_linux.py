@@ -217,3 +217,36 @@ class TestGetWheelPlatforms:
 
         platforms = get_wheel_platforms(wheel_path)
         assert "linux" in platforms
+
+
+class TestLinuxRepairSignature:
+    def test_repair_accepts_no_exclude(self, monkeypatch, tmp_path):
+        import repairwheel._vendor.auditwheel.wheel_abi
+        from repairwheel._vendor.auditwheel.error import NonPlatformWheelError
+        from repairwheel.linux import repair as linux_repair
+
+        monkeypatch.setattr(linux_repair, "get_machine_from_wheel", lambda w: "x86_64")
+        monkeypatch.setattr(linux_repair.monkeypatch, "patch_load_ld_paths", lambda p, s: None)
+        monkeypatch.setattr(linux_repair, "_detect_libc_and_musl_policy", lambda w: (None, None))
+        monkeypatch.setattr(linux_repair.monkeypatch, "patch_libc_detection", lambda libc, musl: None)
+
+        recorded = {}
+
+        def fake_analyze(libc, arch, wheel_file, exclude, **kwargs):
+            recorded["exclude"] = exclude
+            raise NonPlatformWheelError("x86_64", [])
+
+        monkeypatch.setattr(repairwheel._vendor.auditwheel.wheel_abi, "analyze_wheel_abi", fake_analyze)
+
+        fake_wheel = tmp_path / "pkg-1.0-cp38-cp38-linux_x86_64.whl"
+        # Calling without exclude
+        linux_repair.repair(fake_wheel, tmp_path / "out", [], True)
+        assert recorded["exclude"] == frozenset()
+
+        # Calling with exclude=None
+        linux_repair.repair(fake_wheel, tmp_path / "out", [], True, exclude=None)
+        assert recorded["exclude"] == frozenset()
+
+        # Calling with exclude list
+        linux_repair.repair(fake_wheel, tmp_path / "out", [], True, exclude=["foo.so"])
+        assert recorded["exclude"] == frozenset(["foo.so"])
