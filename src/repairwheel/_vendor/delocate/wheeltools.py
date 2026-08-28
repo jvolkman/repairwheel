@@ -3,38 +3,33 @@
 Tools that aren't specific to delocation.
 """
 
+from __future__ import annotations
+
 import base64
 import csv
-import glob
 import hashlib
 import os
-import sys
+from collections.abc import Iterable, Iterator
 from itertools import product
-from os.path import abspath, basename, dirname, exists, relpath, splitext
+from os import PathLike
+from os.path import abspath, basename, dirname, exists, splitext
 from os.path import join as pjoin
-from os.path import sep as psep
-from typing import Iterable, Optional, Union, overload
+from pathlib import Path, PurePosixPath
+from typing import overload
 
 from packaging.utils import parse_wheel_filename
 
 from repairwheel._vendor.delocate.pkginfo import read_pkg_info, write_pkg_info
 
 from .tmpdirs import InTemporaryDirectory
-from .tools import dir2zip, open_rw, unique_by_index, zip2dir
+from .tools import _unique_everseen, dir2zip, zip2dir
 
 
 class WheelToolsError(Exception):
     """Errors raised when reading or writing wheel files."""
 
 
-def _open_for_csv(name, mode):
-    """Deal with Python 2/3 open API differences."""
-    if sys.version_info[0] < 3:
-        return open_rw(name, mode + "b")
-    return open_rw(name, mode, newline="", encoding="utf-8")
-
-
-def rewrite_record(bdist_dir: str) -> None:
+def rewrite_record(bdist_dir: str | PathLike[str]) -> None:
     """Rewrite RECORD file with hashes for all files in `wheel_sdir`.
 
     Copied from :method:`wheel.bdist_wheel.bdist_wheel.write_record`.
@@ -43,45 +38,41 @@ def rewrite_record(bdist_dir: str) -> None:
 
     Parameters
     ----------
-    bdist_dir : str
+    bdist_dir : str or Path-like
         Path of unpacked wheel file
     """
-    info_dirs = glob.glob(pjoin(bdist_dir, "*.dist-info"))
-    if len(info_dirs) != 1:
-        raise WheelToolsError("Should be exactly one `*.dist_info` directory")
-    record_path = pjoin(info_dirs[0], "RECORD")
-    record_relpath = relpath(record_path, bdist_dir)
+    bdist_dir = Path(bdist_dir).resolve(strict=True)
+    try:
+        (info_dir,) = bdist_dir.glob("*.dist-info")
+    except ValueError:
+        msg = "Should be exactly one `*.dist_info` directory"
+        raise WheelToolsError(msg) from None
+    record_path = info_dir / "RECORD"
     # Unsign wheel - because we're invalidating the record hash
-    sig_path = pjoin(info_dirs[0], "RECORD.jws")
-    if exists(sig_path):
-        os.unlink(sig_path)
+    Path(info_dir, "RECORD.jws").unlink(missing_ok=True)
 
-    def walk():
-        for dir, dirs, files in os.walk(bdist_dir):
-            for f in files:
-                yield pjoin(dir, f)
+    def walk() -> Iterator[tuple[Path, str]]:
+        """Walk `(path, relative_posix_str)` for each file in `bdist_dir`."""
+        for dirpath_, _dirnames, filenames in os.walk(bdist_dir):
+            dirpath = Path(dirpath_).resolve()
+            for file in filenames:
+                path = dirpath / file
+                yield path, str(PurePosixPath(path.relative_to(bdist_dir)))
 
-    def skip(path):
-        """Wheel hashes every possible file."""
-        return path == record_relpath
-
-    with _open_for_csv(record_path, "w+") as record_file:
+    with record_path.open("w+", encoding="utf-8", newline="") as record_file:
         writer = csv.writer(record_file)
-        for path in walk():
-            relative_path = relpath(path, bdist_dir)
-            if skip(relative_path):
+        for path, relative_path_for_record in walk():
+            if path == record_path:
                 hash = ""
-                size: Union[int, str] = ""
+                size: int | str = ""
             else:
-                with open(path, "rb") as f:
-                    data = f.read()
+                data = path.read_bytes()
                 digest = hashlib.sha256(data).digest()
-                hash = "sha256=%s" % (
-                    base64.urlsafe_b64encode(digest).decode("ascii").strip("=")
+                hash = "sha256={}".format(
+                    base64.urlsafe_b64encode(digest).decode("ascii").rstrip("=")
                 )
                 size = len(data)
-            path_for_record = relpath(path, bdist_dir).replace(psep, "/")
-            writer.writerow((path_for_record, hash, size))
+            writer.writerow((relative_path_for_record, hash, size))
 
 
 class InWheel(InTemporaryDirectory):
@@ -108,7 +99,7 @@ class InWheel(InTemporaryDirectory):
         """
         self.in_wheel = abspath(in_wheel)
         self.out_wheel = None if out_wheel is None else abspath(out_wheel)
-        super(InWheel, self).__init__()
+        super().__init__()
 
     def __enter__(self):
         """Unpack a wheel and return the path to its temporary directly.
@@ -116,7 +107,7 @@ class InWheel(InTemporaryDirectory):
         Will also chdir to the temporary directory.
         """
         zip2dir(self.in_wheel, self.name)
-        return super(InWheel, self).__enter__()
+        return super().__enter__()
 
     def __exit__(self, exc, value, tb):
         """Write out the wheel based on the value of `out_wheel`, then cleanup.
@@ -126,7 +117,7 @@ class InWheel(InTemporaryDirectory):
         if self.out_wheel is not None:
             rewrite_record(self.name)
             dir2zip(self.name, self.out_wheel)
-        return super(InWheel, self).__exit__(exc, value, tb)
+        return super().__exit__(exc, value, tb)
 
 
 class InWheelCtx(InWheel):
@@ -156,7 +147,7 @@ class InWheelCtx(InWheel):
             filename of wheel to write after exiting.  If None, don't write and
             discard
         """
-        super(InWheelCtx, self).__init__(in_wheel, out_wheel)
+        super().__init__(in_wheel, out_wheel)
         self.wheel_path = None
 
     def __enter__(self):
@@ -165,7 +156,7 @@ class InWheelCtx(InWheel):
 
         Will also chdir to the temporary directory.
         """
-        self.wheel_path = super(InWheelCtx, self).__enter__()
+        self.wheel_path = super().__enter__()
         return self
 
 
@@ -190,9 +181,9 @@ def add_platforms(
 def add_platforms(
     in_wheel: str,
     platforms: Iterable[str],
-    out_path: Optional[str] = None,
+    out_path: str | None = None,
     clobber: bool = False,
-) -> Optional[str]:
+) -> str | None:
     """Add platform tags `platforms` to `in_wheel` filename and WHEEL tags.
 
     Add any platform tags in `platforms` that are missing from `in_wheel`
@@ -232,9 +223,7 @@ def add_platforms(
     out_wheel = pjoin(out_path, out_wheel_base + ext)
     if exists(out_wheel) and not clobber:
         raise WheelToolsError(
-            "Not overwriting {0}; set clobber=True to overwrite".format(
-                out_wheel
-            )
+            f"Not overwriting {out_wheel}; set clobber=True to overwrite"
         )
     with InWheelCtx(in_wheel) as ctx:
         info = read_pkg_info(info_fname)
@@ -244,7 +233,7 @@ def add_platforms(
         # Python version, C-API version combinations
         pyc_apis = ["-".join(tag.split("-")[:2]) for tag in in_info_tags]
         # unique Python version, C-API version combinations
-        pyc_apis = unique_by_index(pyc_apis)
+        pyc_apis = list(_unique_everseen(pyc_apis))
         # Add new platform tags for each Python version, C-API combination
         required_tags = ["-".join(tup) for tup in product(pyc_apis, platforms)]
         needs_write = False

@@ -2,7 +2,7 @@ diff --git a/src/repairwheel/_vendor/auditwheel/repair.py b/src/repairwheel/_ven
 index afea3e8..b5c21e8 100644
 --- a/src/repairwheel/_vendor/auditwheel/repair.py
 +++ b/src/repairwheel/_vendor/auditwheel/repair.py
-@@ -139,7 +139,7 @@ def repair_wheel(
+@@ -150,7 +150,7 @@ def repair_wheel(
          if sbom_data:
              sbom_dir = Path(dist_info_dirs[0], "sboms")
              sbom_dir.mkdir(exist_ok=True)

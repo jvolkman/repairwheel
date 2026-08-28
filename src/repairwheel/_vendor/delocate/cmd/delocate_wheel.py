@@ -2,6 +2,9 @@
 """Copy, relink library dependencies for wheel.
 
 Overwrites the wheel in-place by default.
+
+This script respects the MACOSX_DEPLOYMENT_TARGET environment variable.
+Set MACOSX_DEPLOYMENT_TARGET to verify and target a specific macOS release.
 """
 
 # vim: ft=python
@@ -11,7 +14,6 @@ import os
 from argparse import ArgumentParser
 from os.path import basename, exists, expanduser
 from os.path import join as pjoin
-from typing import List, Optional, Text
 
 from packaging.version import Version
 
@@ -40,7 +42,9 @@ parser.add_argument(
     action="store",
     type=str,
     default=".dylibs",
-    help="Subdirectory in packages to store copied libraries",
+    help="Subdirectory in packages to store copied libraries"
+    "\nFor non-package wheels this will be used as a suffix for the library "
+    "directory",
 )
 parser.add_argument(
     "-w",
@@ -67,7 +71,8 @@ parser.add_argument(
 parser.add_argument(
     "--require-target-macos-version",
     type=Version,
-    help="Verify if platform tag in wheel name is proper",
+    help="Verify if platform tag in wheel name is proper (deprecated)"
+    "\nConfigure MACOSX_DEPLOYMENT_TARGET instead of using this flag",
     default=None,
 )
 
@@ -83,7 +88,7 @@ def main() -> None:  # noqa: D103
             os.makedirs(wheel_dir)
     else:
         wheel_dir = None
-    require_archs: Optional[List[Text]] = None
+    require_archs: list[str] | None = None
     if args.require_archs is None:
         require_archs = [] if args.check_archs else None
     elif "," in args.require_archs:
@@ -116,7 +121,7 @@ def main() -> None:  # noqa: D103
             **delocate_values(args),
         )
         if args.verbose and len(copied):
-            print("Copied to package {0} directory:".format(args.lib_sdir))
+            print(f"Copied to package {args.lib_sdir} directory:")
             copy_lines = ["  " + name for name in sorted(copied)]
             print("\n".join(copy_lines))
 

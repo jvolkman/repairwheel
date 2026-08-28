@@ -10,8 +10,9 @@ import logging
 import os
 import sys
 from argparse import ArgumentParser, Namespace
+from collections.abc import Iterable, Iterator
 from pathlib import Path
-from typing import Callable, Iterable, Iterator, List
+from typing import Callable
 
 from typing_extensions import Literal, TypedDict
 
@@ -70,7 +71,14 @@ delocate_parser.add_argument(
 delocate_parser.add_argument(
     "--sanitize-rpaths",
     action="store_true",
-    help="Remove absolute and relative rpaths from binaries",
+    default=True,
+    help="Remove absolute and relative rpaths from binaries (default)",
+)
+delocate_parser.add_argument(
+    "--no-sanitize-rpaths",
+    action="store_false",
+    dest="sanitize_rpaths",
+    help="Don't remove absolute and relative rpaths from binaries",
 )
 
 
@@ -95,7 +103,7 @@ class DelocateArgs(TypedDict):
 
 def delocate_values(args: Namespace) -> DelocateArgs:
     """Return the common kwargs for delocate_path and delocate_wheel."""
-    exclude_files: List[str] = args.exclude
+    exclude_files: list[str] = args.exclude
 
     def copy_filter_exclude(name: str) -> bool:
         """Return False if name is excluded, uses normal rules otherwise."""

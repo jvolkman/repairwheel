@@ -1,6 +1,6 @@
 import logging
+import os
 import struct
-from collections.abc import Callable
 from typing import TypeVar
 from macholib.MachO import MachO
 from macholib.MachO import MachOHeader
@@ -21,7 +21,7 @@ T = TypeVar("T")
 
 # Errors that we ignore when attempting to read files. Delocate will attempt
 # to read all files (e.g., py.typed) even if they aren't dylibs.
-IGNORED_READ_ERRORS = (ValueError, struct.error)
+IGNORED_READ_ERRORS = (ValueError, struct.error, OSError)
 
 # Maps from macholib's CPU_TYPE_NAMES entry and get_cpu_subtype output to
 # what lipo would print
@@ -107,99 +107,70 @@ LIPO_ARCH_NAMES = {
 LIBRARY_COMMANDS = [LC_LOAD_DYLIB, LC_LOAD_WEAK_DYLIB, LC_REEXPORT_DYLIB, LC_LOAD_UPWARD_DYLIB, LC_LAZY_LOAD_DYLIB]
 
 
-def _all_arches_same_value(macho: MachO, fn: Callable[[MachOHeader], T]) -> T:
-    val = fn(macho.headers[0])
-    for header in macho.headers[1:]:
-        next_val = fn(header)
-        if next_val != val:
-            raise NotImplementedError("This function does not support separate values per-architecture")
-        val = next_val
+def _header_arch_key(header: MachOHeader, num_headers: int) -> str:
+    if num_headers == 1:
+        return ""
+    cputype = CPU_TYPE_NAMES.get(header.header.cputype)
+    cpusubtype = get_cpu_subtype(header.header.cputype, header.header.cpusubtype)
+    name = LIPO_ARCH_NAMES.get(cputype, {}).get(cpusubtype)
+    if name is None:
+        raise ValueError(f"Unknown cpu: type={cputype}, subtype={cpusubtype}")
+    return name
 
-    return val
 
+def _get_install_names(filename: str | os.PathLike) -> dict[str, list[str]]:
+    try:
+        macho = MachO(filename)
+    except IGNORED_READ_ERRORS:
+        return {}
 
-def get_install_names(filename: str) -> tuple[str, ...]:
-    """Return install names from library named in `filename`
-
-    Returns tuple of install names
-
-    tuple will be empty if no install names, or if this is not an object file.
-
-    Parameters
-    ----------
-    filename : str
-        filename of library
-
-    Returns
-    -------
-    install_names : tuple
-        tuple of install names for library `filename`
-
-    Raises
-    ------
-    NotImplementedError
-        If ``filename`` has different install names per-architecture.
-    InstallNameError
-        On any unexpected output from ``otool``.
-    """
-
-    # otool -L
-    def _val(header: MachOHeader) -> tuple[str]:
-        results = []
+    num_headers = len(macho.headers)
+    all_names = {}
+    for header in macho.headers:
+        arch = _header_arch_key(header, num_headers)
+        names = []
         for entry in header.commands:
             lc, cmd, _ = entry
-            if lc.cmd not in LIBRARY_COMMANDS:
-                continue
+            if lc.cmd in LIBRARY_COMMANDS:
+                names.append(lc_str_value(cmd.name, entry).decode("utf-8"))
+        all_names[arch] = names
+    return all_names
 
-            # cmd.name is type lc_str, whose documentation says:
-            # > A long integer. A byte offset from the start of the load command that contains this
-            #   string to the start of the string data
-            #
-            # lc_str_value takes care of getting the actual string value, and trimming trailing nulls.
-            results.append(lc_str_value(cmd.name, entry).decode("utf-8"))
 
-        return tuple(results)
-
+def _get_install_ids(filename: str | os.PathLike) -> dict[str, str]:
     try:
         macho = MachO(filename)
-        return _all_arches_same_value(macho, _val)
     except IGNORED_READ_ERRORS:
-        return ()
+        return {}
 
-
-def get_install_id(filename: str) -> str | None:
-    """Return install id from library named in `filename`
-
-    Returns None if no install id, or if this is not an object file.
-
-    Parameters
-    ----------
-    filename : str
-        filename of library
-
-    Returns
-    -------
-    install_id : str
-        install id of library `filename`, or None if no install id
-
-    Raises
-    ------
-    NotImplementedError
-        If ``filename`` has different install ids per-architecture.
-    """
-
-    # otool -D
-    def _val(header: MachOHeader) -> str | None:
+    num_headers = len(macho.headers)
+    all_ids = {}
+    for header in macho.headers:
         if header.id_cmd is not None:
+            arch = _header_arch_key(header, num_headers)
             entry = header.commands[header.id_cmd]
             _, cmd, _ = entry
-            return lc_str_value(cmd.name, entry).decode("utf-8")
+            all_ids[arch] = lc_str_value(cmd.name, entry).decode("utf-8")
+    return all_ids
 
+
+def _get_rpaths(filename: str | os.PathLike) -> dict[str, list[str]]:
     try:
         macho = MachO(filename)
-        return _all_arches_same_value(macho, _val)
     except IGNORED_READ_ERRORS:
-        return None
+        return {}
+
+    num_headers = len(macho.headers)
+    all_rpaths = {}
+    for header in macho.headers:
+        arch = _header_arch_key(header, num_headers)
+        rpaths = []
+        for entry in header.commands:
+            lc, cmd, _ = entry
+            if lc.cmd == LC_RPATH:
+                rpaths.append(lc_str_value(cmd.path, entry).decode("utf-8"))
+        all_rpaths[arch] = rpaths
+    return all_rpaths
 
 
 def set_install_name(filename: str, oldname: str, newname: str, ad_hoc_sign: bool = True) -> None:
@@ -269,49 +240,6 @@ def set_install_id(filename: str, install_id: str, ad_hoc_sign: bool = True):
 
         if ad_hoc_sign:
             replace_signature(filename, "-")
-
-
-def get_rpaths(filename: str) -> tuple[str, ...]:
-    """Return a tuple of rpaths from the library `filename`.
-
-    If `filename` is not a library then the returned tuple will be empty.
-
-    Parameters
-    ----------
-    filename : str
-        filename of library
-
-    Returns
-    -------
-    rpath : tuple
-        rpath paths in `filename`
-
-    Raises
-    ------
-    NotImplementedError
-        If ``filename`` has different rpaths per-architecture.
-    InstallNameError
-        On any unexpected output from ``otool``.
-    """
-
-    # otool -l
-    def _val(header: MachOHeader) -> tuple[str]:
-        results = []
-        for entry in header.commands:
-            lc, cmd, _ = entry
-            if lc.cmd != LC_RPATH:
-                continue
-
-            # cmd.path is type lc_str.
-            results.append(lc_str_value(cmd.path, entry).decode("utf-8"))
-
-        return tuple(results)
-
-    try:
-        macho = MachO(filename)
-        return _all_arches_same_value(macho, _val)
-    except IGNORED_READ_ERRORS:
-        return ()
 
 
 def get_archs(filename: str) -> frozenset[str]:

@@ -10,11 +10,11 @@ def _patch_tools():
     from . import machotools as patched_tools
 
     for fn_name in [
-        "get_install_names",
-        "get_install_id",
+        "_get_install_names",
+        "_get_install_ids",
+        "_get_rpaths",
         "set_install_name",
         "set_install_id",
-        "get_rpaths",
         "get_archs",
         "replace_signature",
         "validate_signature",

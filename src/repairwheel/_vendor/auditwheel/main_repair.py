@@ -11,7 +11,7 @@ from repairwheel._vendor.auditwheel import options
 from repairwheel._vendor.auditwheel.architecture import Architecture
 from repairwheel._vendor.auditwheel.error import NonPlatformWheelError, WheelToolsError
 from repairwheel._vendor.auditwheel.libc import Libc
-from repairwheel._vendor.auditwheel.patcher import Patchelf
+from repairwheel._vendor.auditwheel.patcher import ElfPatcher
 from repairwheel._vendor.auditwheel.policy import WheelPolicies
 from repairwheel._vendor.auditwheel.tools import EnvironmentDefault
 from repairwheel._vendor.auditwheel.wheeltools import get_wheel_architecture, get_wheel_libc
@@ -122,6 +122,16 @@ wheel will abort processing of subsequent wheels.
     options.disable_isa_check(parser)
     options.allow_pure_python_wheel(parser)
     options.ldpaths(parser)
+    parser.add_argument(
+        "--patcher",
+        action=EnvironmentDefault,
+        metavar="PATCHER",
+        env="AUDITWHEEL_PATCHER",
+        dest="PATCHER",
+        help="ELF patcher to use",
+        default="patchelf",
+        choices=["patchelf", "lief-patchelf", "none"],
+    )
 
     parser.set_defaults(func=execute)
 
@@ -266,7 +276,7 @@ def execute(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
                 *abis,
             ]
 
-        patcher = Patchelf(requested_policy.name)
+        patcher = ElfPatcher.get_patcher(args.PATCHER, requested_policy.name)
         out_wheel = repair_wheel(
             wheel_abi,
             wheel_file,
