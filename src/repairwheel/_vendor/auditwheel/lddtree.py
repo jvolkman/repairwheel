@@ -24,8 +24,10 @@ from fnmatch import fnmatch
 from pathlib import Path
 
 from elftools.elf.constants import E_FLAGS
+from elftools.elf.dynamic import DynamicSegment
 from elftools.elf.elffile import ELFFile
 from elftools.elf.sections import NoteSection
+from elftools.elf.segments import InterpSegment
 
 from repairwheel._vendor.auditwheel.architecture import Architecture
 from repairwheel._vendor.auditwheel.error import InvalidLibcError
@@ -318,7 +320,7 @@ def load_ld_paths(
 ) -> dict[str, list[str]]:
     """Load linker paths from common locations
 
-    This parses the ld.so.conf and LD_LIBRARY_PATH env var.
+    This parses the ld.so.conf and AUDITWHEEL_LD_LIBRARY_PATH / LD_LIBRARY_PATH env vars.
 
     Parameters
     ----------
@@ -334,15 +336,22 @@ def load_ld_paths(
     """
     ldpaths: dict[str, list[str]] = {"conf": [], "env": [], "interp": []}
 
-    # Load up $LD_LIBRARY_PATH.
-    env_ldpath = os.environ.get("LD_LIBRARY_PATH")
-    if env_ldpath is not None:
-        if root != "/":
-            log.warning("ignoring LD_LIBRARY_PATH due to ROOT usage")
-        else:
-            # TODO: If this contains $ORIGIN, we probably have to parse this
-            # on a per-ELF basis so it can get turned into the right thing.
-            ldpaths["env"] = parse_ld_paths(env_ldpath, path="")
+    ld_library_path = os.environ.get("LD_LIBRARY_PATH")
+    if root != "/" and ld_library_path is not None:
+        log.warning("ignoring LD_LIBRARY_PATH due to ROOT usage")
+        ld_library_path = None
+
+    # Load up $AUDITWHEEL_LD_LIBRARY_PATH and $LD_LIBRARY_PATH
+    env_ldpath = ":".join(
+        filter(None, (os.environ.get("AUDITWHEEL_LD_LIBRARY_PATH"), ld_library_path)),
+    )
+
+    if env_ldpath:
+        # TODO: If this contains $ORIGIN, we probably have to parse this
+        # on a per-ELF basis so it can get turned into the right thing.
+        # don't pass root: in case root != "/", only AUDITWHEEL_LD_LIBRARY_PATH is checked
+        # it shall already contain fully resolved paths
+        ldpaths["env"] = parse_ld_paths(env_ldpath, path="")
 
     if libc == Libc.MUSL:
         # from https://git.musl-libc.org/cgit/musl/tree/ldso
@@ -494,7 +503,7 @@ def ldd(
         # If this is the first ELF, extract the interpreter.
         if _first:
             for segment in elf.iter_segments():
-                if segment.header.p_type != "PT_INTERP":
+                if not isinstance(segment, InterpSegment):
                     continue
                 interp = segment.get_interp_name()
                 log.debug("  interp           = %s", interp)
@@ -522,15 +531,15 @@ def ldd(
 
         # Parse the ELF's dynamic tags.
         for segment in elf.iter_segments():
-            if segment.header.p_type != "PT_DYNAMIC":
+            if not isinstance(segment, DynamicSegment):
                 continue
             for t in segment.iter_tags():
                 if t.entry.d_tag == "DT_RPATH":
-                    rpaths = parse_ld_paths(t.rpath, path=str(path), root=root)
+                    rpaths = parse_ld_paths(t.rpath, path=str(path), root=root)  # type: ignore[attr-defined]
                 elif t.entry.d_tag == "DT_RUNPATH":
-                    runpaths = parse_ld_paths(t.runpath, path=str(path), root=root)
+                    runpaths = parse_ld_paths(t.runpath, path=str(path), root=root)  # type: ignore[attr-defined]
                 elif t.entry.d_tag == "DT_NEEDED":
-                    needed.append(t.needed)
+                    needed.append(t.needed)  # type: ignore[attr-defined]
             if runpaths:
                 # If both RPATH and RUNPATH are set, only the latter is used.
                 rpaths = []
