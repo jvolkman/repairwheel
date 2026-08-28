@@ -28,6 +28,7 @@ dependencies = [
   "packaging >= 20.9",
   "pyelftools >= 0.24",
   "pefile >= 2023.2.7",  # for delvewheel
+  "typing_extensions >= 4.12.2",
 ]
 
 [project.scripts]

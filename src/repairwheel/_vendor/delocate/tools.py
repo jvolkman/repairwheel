@@ -2,14 +2,15 @@
 
 from __future__ import annotations
 
+import itertools
 import logging
 import os
 import re
 import stat
 import subprocess
 import time
-import warnings
 import zipfile
+from collections.abc import Iterable, Iterator, Sequence
 from datetime import datetime
 from os import PathLike
 from os.path import exists, isdir
@@ -17,17 +18,10 @@ from os.path import join as pjoin
 from pathlib import Path
 from typing import (
     Any,
-    Dict,
-    FrozenSet,
-    Iterable,
-    List,
-    Optional,
-    Sequence,
-    Set,
-    Tuple,
     TypeVar,
-    Union,
 )
+
+from typing_extensions import deprecated
 
 T = TypeVar("T")
 
@@ -38,11 +32,12 @@ class InstallNameError(Exception):
     """Errors reading or modifying macOS install name identifiers."""
 
 
+@deprecated("Replace this call with subprocess.run")
 def back_tick(
-    cmd: Union[str, Sequence[str]],
+    cmd: str | Sequence[str],
     ret_err: bool = False,
     as_str: bool = True,
-    raise_err: Optional[bool] = None,
+    raise_err: bool | None = None,
 ) -> Any:
     """Run command `cmd`, return stdout, or stdout, stderr if `ret_err`.
 
@@ -78,11 +73,6 @@ def back_tick(
         This function was deprecated because the return type is too dynamic.
         You should use :func:`subprocess.run` instead.
     """
-    warnings.warn(
-        "back_tick is deprecated, replace this call with subprocess.run.",
-        DeprecationWarning,
-        stacklevel=2,
-    )
     if raise_err is None:
         raise_err = False if ret_err else True
     cmd_is_seq = isinstance(cmd, (list, tuple))
@@ -90,9 +80,8 @@ def back_tick(
         proc = subprocess.run(
             cmd,
             shell=not cmd_is_seq,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            universal_newlines=as_str,
+            capture_output=True,
+            text=as_str,
             check=raise_err,
         )
     except subprocess.CalledProcessError as exc:
@@ -105,7 +94,7 @@ def back_tick(
 
 
 def _run(
-    cmd: Sequence[str], *, check: bool
+    cmd: Sequence[str | PathLike[str]], *, check: bool
 ) -> subprocess.CompletedProcess[str]:
     r"""Run ``cmd`` capturing output and handling non-zero exit codes by default.
 
@@ -142,8 +131,7 @@ def _run(
     try:
         return subprocess.run(
             cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            capture_output=True,
             text=True,
             check=check,
         )
@@ -184,7 +172,25 @@ def _is_macho_file(filename: str | os.PathLike[str]) -> bool:
         return False
 
 
-def unique_by_index(sequence):
+def _unique_everseen(iterable: Iterable[T], /) -> Iterator[T]:
+    """Yield unique elements, preserving order.
+
+    Simplified version of unique_everseen, see itertools recipes.
+
+    Examples
+    --------
+    >>> list(_unique_everseen('AAAABBBCCDAABBB'))
+    ['A', 'B', 'C', 'D']
+    """
+    seen: set[T] = set()
+    for element in iterable:
+        if element not in seen:
+            seen.add(element)
+            yield element
+
+
+@deprecated("Use more-itertools unique_everseen instead")
+def unique_by_index(sequence: Iterable[T]) -> list[T]:
     """Return unique elements in `sequence` in the order in which they occur.
 
     Parameters
@@ -196,12 +202,11 @@ def unique_by_index(sequence):
     uniques : list
         unique elements of sequence, ordered by the order in which the element
         occurs in `sequence`
+
+    .. deprecated:: 0.12
+        Use more-itertools unique_everseen instead.
     """
-    uniques = []
-    for element in sequence:
-        if element not in uniques:
-            uniques.append(element)
-    return uniques
+    return list(_unique_everseen(sequence))
 
 
 def chmod_perms(fname):
@@ -249,7 +254,7 @@ IN_RE = re.compile(
 )
 
 
-def parse_install_name(line: str) -> Tuple[str, str, str]:
+def parse_install_name(line: str) -> tuple[str, str, str]:
     """Parse a line of install name output.
 
     Parameters
@@ -299,7 +304,7 @@ True
 """
 
 
-def _parse_otool_listing(stdout: str) -> Dict[str, List[str]]:
+def _parse_otool_listing(stdout: str) -> dict[str, list[str]]:
     '''Parse the output of otool lists.
 
     Parameters
@@ -348,14 +353,14 @@ def _parse_otool_listing(stdout: str) -> Dict[str, List[str]]:
     RuntimeError: Input has duplicate architectures for ...
     '''  # noqa: D301
     stdout = stdout.strip()
-    out: Dict[str, List[str]] = {}
+    out: dict[str, list[str]] = {}
     lines = stdout.split("\n")
     while lines:
         # Detect and parse the name/arch header line.
         match_arch = _OTOOL_ARCHITECTURE_RE.match(lines.pop(0))
         if not match_arch:
             raise RuntimeError(f"Missing file/architecture header:\n{stdout}")
-        current_arch: Optional[str] = match_arch["architecture"]
+        current_arch: str | None = match_arch["architecture"]
         if current_arch is None:
             current_arch = ""
         if current_arch in out:
@@ -370,7 +375,8 @@ def _parse_otool_listing(stdout: str) -> Dict[str, List[str]]:
     return out
 
 
-def _check_ignore_archs(input: Dict[str, T]) -> T:
+@deprecated("This function is no longer needed and should not be used")
+def _check_ignore_archs(input: dict[str, T]) -> T:
     """Merge architecture outputs for functions which don't support multiple.
 
     This is used to maintain backward compatibility inside of functions which
@@ -419,7 +425,7 @@ def _check_ignore_archs(input: Dict[str, T]) -> T:
 
 def _parse_otool_install_names(
     stdout: str,
-) -> Dict[str, List[Tuple[str, str, str]]]:
+) -> dict[str, list[tuple[str, str, str]]]:
     '''Parse the stdout of 'otool -L' and return.
 
     Parameters
@@ -452,7 +458,7 @@ def _parse_otool_install_names(
     ... """)
     {'': [('/usr/lib/libc++.1.dylib', '1.0.0', '905.6.0'), ('/usr/lib/libSystem.B.dylib', '1.0.0', '1292.100.5')]}
     '''  # noqa: E501, D301
-    out: Dict[str, List[Tuple[str, str, str]]] = {}
+    out: dict[str, list[tuple[str, str, str]]] = {}
     for arch, install_names in _parse_otool_listing(stdout).items():
         out[arch] = [parse_install_name(name) for name in install_names]
     return out
@@ -484,12 +490,14 @@ BAD_OBJECT_TESTS = [
 _LINE0_RE = re.compile(r"^(?: \(architecture .*\))?:(?P<further_report>.*)")
 
 
-def _line0_says_object(stdout_stderr: str, filename: str) -> bool:
+def _line0_says_object(
+    stdout_stderr: str, filename: str | PathLike[str]
+) -> bool:
     """Return True if an output is for an object and matches filename.
 
     Parameters
     ----------
-    stdout_stderr : str
+    stdout_stderr : str or PathLike
         The combined stdout/stderr streams from ``otool``.
     filename: str
         The name of the file queried by ``otool``.
@@ -505,6 +513,7 @@ def _line0_says_object(stdout_stderr: str, filename: str) -> bool:
     InstallNameError
         On any unexpected output which would leave the return value unknown.
     """
+    filename = str(Path(filename))
     line0 = stdout_stderr.strip().split("\n", 1)[0]
     for test in BAD_OBJECT_TESTS:
         if test(line0):
@@ -522,11 +531,13 @@ def _line0_says_object(stdout_stderr: str, filename: str) -> bool:
     if further_report == "":
         return True
     raise InstallNameError(
-        'Too ignorant to know what "{0}" means'.format(further_report)
+        f'Too ignorant to know what "{further_report}" means'
     )
 
 
-def get_install_names(filename: str) -> Tuple[str, ...]:
+def _get_install_names(
+    filename: str | PathLike[str],
+) -> dict[str, list[str]]:
     """Return install names from library named in `filename`.
 
     Returns tuple of install names.
@@ -535,7 +546,7 @@ def get_install_names(filename: str) -> Tuple[str, ...]:
 
     Parameters
     ----------
-    filename : str
+    filename : str or PathLike
         filename of library
 
     Returns
@@ -545,29 +556,62 @@ def get_install_names(filename: str) -> Tuple[str, ...]:
 
     Raises
     ------
-    NotImplementedError
-        If ``filename`` has different install names per-architecture.
     InstallNameError
         On any unexpected output from ``otool``.
     """
     if not _is_macho_file(filename):
-        return ()
-    otool = _run(["otool", "-L", filename], check=False)
+        return {}
+    otool = _run(["otool", "-arch", "all", "-m", "-L", filename], check=False)
     if not _line0_says_object(otool.stdout or otool.stderr, filename):
-        return ()
-    install_id = get_install_id(filename)
-    names_data = _check_ignore_archs(_parse_otool_install_names(otool.stdout))
-    names = [name for name, _, _ in names_data]
-    if install_id:  # Remove redundant install id from the install names.
-        if names[0] != install_id:
-            raise InstallNameError(
-                f"Expected {install_id!r} to be first in {names}"
-            )
-        names = names[1:]
-    return tuple(names)
+        return {}
+    install_ids = _get_install_ids(filename)
+    # Collect install names for each architecture
+    all_names: dict[str, list[str]] = {}
+    for arch, names_data in _parse_otool_install_names(otool.stdout).items():
+        names = [name for name, _, _ in names_data]
+        # Remove redundant install id from the install names.
+        if arch in install_ids:
+            if names[0] != install_ids[arch]:
+                raise InstallNameError(
+                    f"Expected {install_ids[arch]!r} to be first in {names}"
+                )
+            names = names[1:]
+        all_names[arch] = names
+
+    return all_names
 
 
-def get_install_id(filename: str) -> Optional[str]:
+def get_install_names(filename: str | PathLike[str]) -> tuple[str, ...]:
+    """Return install names from library named in `filename`.
+
+    Returns tuple of install names.
+
+    tuple will be empty if no install names, or if this is not an object file.
+
+    Parameters
+    ----------
+    filename : str or PathLike
+        filename of library
+
+    Returns
+    -------
+    install_names : tuple
+        tuple of install names for library `filename`
+
+    Raises
+    ------
+    InstallNameError
+        On any unexpected output from ``otool``.
+    """
+    return tuple(
+        _unique_everseen(
+            itertools.chain(*_get_install_names(filename).values())
+        )
+    )
+
+
+@deprecated("This function was replaced by _get_install_ids")
+def get_install_id(filename: str) -> str | None:
     """Return install id from library named in `filename`.
 
     Returns None if no install id, or if this is not an object file.
@@ -586,6 +630,10 @@ def get_install_id(filename: str) -> Optional[str]:
     ------
     NotImplementedError
         If ``filename`` has different install ids per-architecture.
+
+    .. deprecated:: 0.12
+        This function has been replaced by the private function
+        `_get_install_ids`.
     """
     install_ids = _get_install_ids(filename)
     if not install_ids:
@@ -593,7 +641,7 @@ def get_install_id(filename: str) -> Optional[str]:
     return _check_ignore_archs(install_ids)
 
 
-def _get_install_ids(filename: str) -> Dict[str, str]:
+def _get_install_ids(filename: str | PathLike[str]) -> dict[str, str]:
     """Return the install ids of a library.
 
     Parameters
@@ -616,7 +664,7 @@ def _get_install_ids(filename: str) -> Dict[str, str]:
     """
     if not _is_macho_file(filename):
         return {}
-    otool = _run(["otool", "-D", filename], check=False)
+    otool = _run(["otool", "-arch", "all", "-m", "-D", filename], check=False)
     if not _line0_says_object(otool.stdout or otool.stderr, filename):
         return {}
     out = {}
@@ -651,9 +699,7 @@ def set_install_name(
     """
     names = get_install_names(filename)
     if oldname not in names:
-        raise InstallNameError(
-            "{0} not in install names for {1}".format(oldname, filename)
-        )
+        raise InstallNameError(f"{oldname} not in install names for {filename}")
     _run(
         ["install_name_tool", "-change", oldname, newname, filename], check=True
     )
@@ -664,12 +710,14 @@ def set_install_name(
 
 
 @ensure_writable
-def set_install_id(filename: str, install_id: str, ad_hoc_sign: bool = True):
+def set_install_id(
+    filename: str | PathLike[str], install_id: str, ad_hoc_sign: bool = True
+):
     """Set install id for library named in `filename`.
 
     Parameters
     ----------
-    filename : str
+    filename : str or PathLike
         filename of library
     install_id : str
         install id for library `filename`
@@ -680,8 +728,8 @@ def set_install_id(filename: str, install_id: str, ad_hoc_sign: bool = True):
     ------
     RuntimeError if `filename` has not install id
     """
-    if get_install_id(filename) is None:
-        raise InstallNameError("{0} has no install id".format(filename))
+    if not _get_install_ids(filename):
+        raise InstallNameError(f"{filename} has no install id")
     _run(["install_name_tool", "-id", install_id, filename], check=True)
     if ad_hoc_sign:
         replace_signature(filename, "-")
@@ -690,7 +738,7 @@ def set_install_id(filename: str, install_id: str, ad_hoc_sign: bool = True):
 RPATH_RE = re.compile(r"path (?P<rpath>.*) \(offset \d+\)")
 
 
-def _parse_otool_rpaths(stdout: str) -> Dict[str, List[str]]:
+def _parse_otool_rpaths(stdout: str) -> dict[str, list[str]]:
     '''Return the rpaths of the library `filename`.
 
     Parameters
@@ -730,7 +778,7 @@ def _parse_otool_rpaths(stdout: str) -> Dict[str, List[str]]:
     ... """)
     {'x86_64': ['path/x86_64'], 'arm64': ['path/arm64']}
     '''
-    rpaths: Dict[str, List[str]] = {}
+    rpaths: dict[str, list[str]] = {}
     for arch, lines in _parse_otool_listing(stdout).items():
         rpaths[arch] = []
         line_no = 0
@@ -748,16 +796,49 @@ def _parse_otool_rpaths(stdout: str) -> Dict[str, List[str]]:
     return rpaths
 
 
-def get_rpaths(filename: str) -> Tuple[str, ...]:
-    """Return a tuple of rpaths from the library `filename`.
+def _get_rpaths(
+    filename: str | PathLike[str],
+) -> dict[str, list[str]]:
+    """Return the rpaths from the library `filename` organized by architecture.
 
-    If `filename` is not a library then the returned tuple will be empty.
+    If `filename` is not a library then the returned dict will be empty.
     Duplicate rpaths will be returned if there are duplicate rpaths in the
     Mach-O binary.
 
     Parameters
     ----------
-    filename : str
+    filename
+        filename of library
+
+    Returns
+    -------
+    rpaths
+        A dict of rpaths, the key is the architecture and the values are a
+        sequence of directories.
+
+    Raises
+    ------
+    InstallNameError
+        On any unexpected output from ``otool``.
+    """
+    if not _is_macho_file(filename):
+        return {}
+    otool = _run(["otool", "-arch", "all", "-m", "-l", filename], check=False)
+    if not _line0_says_object(otool.stdout or otool.stderr, filename):
+        return {}
+
+    return _parse_otool_rpaths(otool.stdout)
+
+
+@deprecated("This function has been replaced by _get_rpaths")
+def get_rpaths(filename: str | PathLike[str]) -> tuple[str, ...]:
+    """Return a tuple of rpaths from the library `filename`.
+
+    If `filename` is not a library then the returned tuple will be empty.
+
+    Parameters
+    ----------
+    filename : str or PathLike
         filename of library
 
     Returns
@@ -771,17 +852,17 @@ def get_rpaths(filename: str) -> Tuple[str, ...]:
         If ``filename`` has different rpaths per-architecture.
     InstallNameError
         On any unexpected output from ``otool``.
+
+    .. deprecated:: 0.12
+        This function has been replaced by the private function `_get_rpaths`.
     """
-    if not _is_macho_file(filename):
-        return ()
-    otool = _run(["otool", "-l", filename], check=False)
-    if not _line0_says_object(otool.stdout or otool.stderr, filename):
-        return ()
-    rpaths = _check_ignore_archs(_parse_otool_rpaths(otool.stdout))
-    return tuple(rpaths)
+    # Simply return all rpaths ignoring architectures
+    return tuple(
+        _unique_everseen(itertools.chain(*_get_rpaths(filename).values()))
+    )
 
 
-def get_environment_variable_paths():
+def get_environment_variable_paths() -> tuple[str, ...]:
     """Return a tuple of entries in `DYLD_LIBRARY_PATH` and `DYLD_FALLBACK_LIBRARY_PATH`.
 
     This will allow us to search those locations for dependencies of libraries
@@ -933,12 +1014,12 @@ def zip2dir(
 
 
 _ZIP_TIMESTAMP_MIN = 315532800  # 1980-01-01 00:00:00 UTC
-_DateTuple = Tuple[int, int, int, int, int, int]
+_DateTuple = tuple[int, int, int, int, int, int]
 
 
 def _get_zip_datetime(
-    date_time: Optional[_DateTuple] = None,
-) -> Optional[_DateTuple]:
+    date_time: _DateTuple | None = None,
+) -> _DateTuple | None:
     """Return ``SOURCE_DATE_EPOCH`` if set, otherwise return `date_time`.
 
     https://reproducible-builds.org/docs/source-date-epoch/
@@ -967,7 +1048,7 @@ def dir2zip(
     *,
     compression: int = zipfile.ZIP_DEFLATED,
     compress_level: int = -1,
-    date_time: Optional[_DateTuple] = None,
+    date_time: _DateTuple | None = None,
 ) -> None:
     """Make a zip file `zip_fname` with contents of directory `in_dir`.
 
@@ -1014,7 +1095,7 @@ def dir2zip(
                 )
 
 
-def find_package_dirs(root_path: str) -> Set[str]:
+def find_package_dirs(root_path: str) -> set[str]:
     """Find python package directories in directory `root_path`.
 
     Parameters
@@ -1059,7 +1140,7 @@ def cmp_contents(filename1, filename2):
     return contents1 == contents2
 
 
-def get_archs(libname: str) -> FrozenSet[str]:
+def get_archs(libname: str) -> frozenset[str]:
     """Return architecture types from library `libname`.
 
     Parameters
@@ -1082,35 +1163,37 @@ def get_archs(libname: str) -> FrozenSet[str]:
         return frozenset()
     lines = [line.strip() for line in stdout.split("\n") if line.strip()]
     # For some reason, output from lipo -info on .a file generates this line
-    if lines[0] == "input file {0} is not a fat file".format(libname):
+    if lines[0] == f"input file {libname} is not a fat file":
         line = lines[1]
     else:
         assert len(lines) == 1
         line = lines[0]
     for reggie in (
-        "Non-fat file: {0} is architecture: (.*)".format(re.escape(libname)),
-        "Architectures in the fat file: {0} are: (.*)".format(
-            re.escape(libname)
-        ),
+        f"Non-fat file: {re.escape(libname)} is architecture: (.*)",
+        f"Architectures in the fat file: {re.escape(libname)} are: (.*)",
     ):
         match = re.match(reggie, line)
         if match is not None:
             return frozenset(match.groups()[0].split(" "))
-    raise ValueError("Unexpected output: '{0}' for {1}".format(stdout, libname))
+    raise ValueError(f"Unexpected output: '{stdout}' for {libname}")
 
 
+@deprecated("Call lipo directly")
 def lipo_fuse(
-    in_fname1: str, in_fname2: str, out_fname: str, ad_hoc_sign: bool = True
+    in_fname1: str | PathLike[str],
+    in_fname2: str | PathLike[str],
+    out_fname: str | PathLike[str],
+    ad_hoc_sign: bool = True,
 ) -> str:
     """Use lipo to merge libs `filename1`, `filename2`, store in `out_fname`.
 
     Parameters
     ----------
-    in_fname1 : str
+    in_fname1 : str or PathLike
         filename of library
-    in_fname2 : str
+    in_fname2 : str or PathLike
         filename of library
-    out_fname : str
+    out_fname : str or PathLike
         filename to which to write new fused library
     ad_hoc_sign : {True, False}, optional
         If True, sign file with ad-hoc signature
@@ -1130,7 +1213,7 @@ def lipo_fuse(
 
 
 @ensure_writable
-def replace_signature(filename: str, identity: str) -> None:
+def replace_signature(filename: str | PathLike[str], identity: str) -> None:
     """Replace the signature of a binary file using `identity`.
 
     See the codesign documentation for more info.

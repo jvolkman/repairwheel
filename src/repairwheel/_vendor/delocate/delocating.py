@@ -8,24 +8,16 @@ import os
 import re
 import shutil
 import stat
+import struct
 import warnings
+from collections.abc import Iterable, Iterator, Mapping
 from os.path import abspath, basename, dirname, exists, realpath, relpath
 from os.path import join as pjoin
 from pathlib import Path
 from subprocess import PIPE, Popen
 from typing import (
     Callable,
-    Dict,
-    FrozenSet,
-    Iterable,
-    Iterator,
-    List,
-    Mapping,
-    Optional,
-    Set,
-    Text,
-    Tuple,
-    Union,
+    Final,
 )
 
 from macholib.mach_o import (  # type: ignore[import-untyped]
@@ -36,6 +28,7 @@ from macholib.mach_o import (  # type: ignore[import-untyped]
 from macholib.MachO import MachO  # type: ignore[import-untyped]
 from packaging.utils import parse_wheel_filename
 from packaging.version import Version
+from typing_extensions import deprecated
 
 from .libsana import (
     DelocationError,
@@ -47,9 +40,9 @@ from .libsana import (
     tree_libs,
     tree_libs_from_directory,
 )
+from .pkginfo import read_pkg_info, write_pkg_info
 from .tmpdirs import TemporaryDirectory
 from .tools import (
-    _is_macho_file,
     _remove_absolute_rpaths,
     dir2zip,
     find_package_dirs,
@@ -61,6 +54,11 @@ from .tools import (
 )
 from .wheeltools import InWheel, rewrite_record
 
+try:
+    from repairwheel._vendor.delocate._version import __version__
+except ImportError:  # pragma: no cover
+    __version__ = ""
+
 logger = logging.getLogger(__name__)
 
 # Prefix for install_name_id of copied libraries
@@ -70,8 +68,8 @@ _PLATFORM_REGEXP = re.compile(r"macosx_(\d+)_(\d+)_(\w+)")
 
 
 def posix_relpath(
-    path: Union[str, os.PathLike],
-    start: Union[str, os.PathLike],
+    path: str | os.PathLike[str],
+    start: str | os.PathLike[str],
 ) -> str:
     """Return path relative to start using posix separators (/)."""
     # We use os.path.relpath here since Path.relative_to doesn't support
@@ -82,12 +80,12 @@ def posix_relpath(
 
 
 def delocate_tree_libs(
-    lib_dict: Mapping[Text, Mapping[Text, Text]],
-    lib_path: Text,
-    root_path: Text,
+    lib_dict: Mapping[str, Mapping[str, str]],
+    lib_path: str,
+    root_path: str,
     *,
     sanitize_rpaths: bool = False,
-) -> Dict[Text, Dict[Text, Text]]:
+) -> dict[str, dict[str, str]]:
     """Move needed libraries in `lib_dict` into `lib_path`.
 
     `lib_dict` has keys naming libraries required by the files in the
@@ -149,8 +147,8 @@ def delocate_tree_libs(
 
 
 def _sanitize_rpaths(
-    lib_dict: Mapping[Text, Mapping[Text, Text]],
-    files_to_delocate: Iterable[Text],
+    lib_dict: Mapping[str, Mapping[str, str]],
+    files_to_delocate: Iterable[str],
 ) -> None:
     """Sanitize the rpaths of libraries."""
     for required in files_to_delocate:
@@ -160,9 +158,9 @@ def _sanitize_rpaths(
 
 
 def _analyze_tree_libs(
-    lib_dict: Mapping[Text, Mapping[Text, Text]],
-    root_path: Text,
-) -> Tuple[Dict[Text, Dict[Text, Text]], Set[Text]]:
+    lib_dict: Mapping[str, Mapping[str, str]],
+    root_path: str,
+) -> tuple[dict[str, dict[str, str]], set[str]]:
     """Verify then return which library files to copy and delocate.
 
     Returns
@@ -180,7 +178,7 @@ def _analyze_tree_libs(
     for required, requirings in lib_dict.items():
         if required.startswith("@"):
             # @rpath, etc, at this point should never happen.
-            raise DelocationError("%s was expected to be resolved." % required)
+            raise DelocationError(f"{required} was expected to be resolved.")
         r_ed_base = basename(required)
         if not is_resolved_subpath(required, rp_root_path):
             # Not local, plan to copy
@@ -190,9 +188,7 @@ def _analyze_tree_libs(
                     + r_ed_base
                 )
             if not exists(required):
-                raise DelocationError(
-                    'library "{0}" does not exist'.format(required)
-                )
+                raise DelocationError(f'library "{required}" does not exist')
             # Copy requirings to preserve it since it will be modified later.
             needs_copying[required] = dict(requirings)
             copied_basenames.add(r_ed_base)
@@ -202,11 +198,11 @@ def _analyze_tree_libs(
 
 
 def _copy_required_libs(
-    lib_dict: Mapping[Text, Mapping[Text, Text]],
-    lib_path: Text,
-    root_path: Text,
-    libraries_to_copy: Iterable[Text],
-) -> Tuple[Dict[Text, Dict[Text, Text]], Set[Text]]:
+    lib_dict: Mapping[str, Mapping[str, str]],
+    lib_path: str,
+    root_path: str,
+    libraries_to_copy: Iterable[str],
+) -> tuple[dict[str, dict[str, str]], set[str]]:
     """Copy libraries outside of root_path to lib_path.
 
     Returns
@@ -246,9 +242,9 @@ def _copy_required_libs(
 
 
 def _update_install_names(
-    lib_dict: Mapping[Text, Mapping[Text, Text]],
-    root_path: Text,
-    files_to_delocate: Iterable[Text],
+    lib_dict: Mapping[str, Mapping[str, str]],
+    root_path: str,
+    files_to_delocate: Iterable[str],
 ) -> None:
     """Update the install names of libraries."""
     for required in files_to_delocate:
@@ -273,11 +269,12 @@ def _update_install_names(
                 set_install_name(requiring, orig_install_name, new_install_name)
 
 
+@deprecated("copy_recurse is obsolete and should no longer be called")
 def copy_recurse(
-    lib_path: Text,
-    copy_filt_func: Optional[Callable[[Text], bool]] = None,
-    copied_libs: Optional[Dict[Text, Dict[Text, Text]]] = None,
-) -> Dict[Text, Dict[Text, Text]]:
+    lib_path: str,
+    copy_filt_func: Callable[[str], bool] | None = None,
+    copied_libs: dict[str, dict[str, str]] | None = None,
+) -> dict[str, dict[str, str]]:
     """Analyze `lib_path` for library dependencies and copy libraries.
 
     `lib_path` is a directory containing libraries.  The libraries might
@@ -315,11 +312,6 @@ def copy_recurse(
         This function is obsolete.  :func:`delocate_path` handles recursive
         dependencies while also supporting `@loader_path`.
     """
-    warnings.warn(
-        "copy_recurse is obsolete and should no longer be called.",
-        DeprecationWarning,
-        stacklevel=2,
-    )
     if copied_libs is None:
         copied_libs = {}
     else:
@@ -333,9 +325,9 @@ def copy_recurse(
 
 
 def _copy_required(
-    lib_path: Text,
-    copy_filt_func: Optional[Callable[[Text], bool]],
-    copied_libs: Dict[Text, Dict[Text, Text]],
+    lib_path: str,
+    copy_filt_func: Callable[[str], bool] | None,
+    copied_libs: dict[str, dict[str, str]],
 ) -> None:
     """Copy libraries required for files in `lib_path` to `copied_libs`.
 
@@ -445,15 +437,15 @@ def _delocate_filter_function(
 
 
 def delocate_path(
-    tree_path: Text,
-    lib_path: Text,
-    lib_filt_func: Optional[Union[str, Callable[[Text], bool]]] = None,
-    copy_filt_func: Optional[Callable[[Text], bool]] = filter_system_libs,
-    executable_path: Optional[Text] = None,
+    tree_path: str,
+    lib_path: str,
+    lib_filt_func: str | Callable[[str], bool] | None = None,
+    copy_filt_func: Callable[[str], bool] | None = filter_system_libs,
+    executable_path: str | None = None,
     ignore_missing: bool = False,
     *,
     sanitize_rpaths: bool = False,
-) -> Dict[Text, Dict[Text, Text]]:
+) -> dict[str, dict[str, str]]:
     """Copy required libraries for files in `tree_path` into `lib_path`.
 
     Parameters
@@ -529,8 +521,8 @@ def delocate_path(
 
 
 def _copy_lib_dict(
-    lib_dict: Mapping[Text, Mapping[Text, Text]],
-) -> Dict[Text, Dict[Text, Text]]:
+    lib_dict: Mapping[str, Mapping[str, str]],
+) -> dict[str, dict[str, str]]:
     """Return a copy of lib_dict."""
     return {  # Convert nested Mapping types into nested Dict types.
         required: dict(requiring) for required, requiring in lib_dict.items()
@@ -551,7 +543,7 @@ def _decide_dylib_bundle_directory(
     lib_sdir : str, optional
         Default value for lib sub-directory passed in via
         :func:`delocate_wheel`.
-        Ignored if wheel has no package directories.
+        If wheel has no package directories, used as a suffix.
 
     Returns
     -------
@@ -567,7 +559,7 @@ def _decide_dylib_bundle_directory(
         # Otherwise, store dylib files in the first package alphabetically.
         return pjoin(min(package_dirs), lib_sdir)
     # Otherwise, use an auditwheel-style top-level name.
-    return pjoin(wheel_dir, f"{package_name}.dylibs")
+    return pjoin(wheel_dir, f"{package_name}{lib_sdir}")
 
 
 def _make_install_name_ids_unique(
@@ -606,12 +598,14 @@ def _make_install_name_ids_unique(
         validate_signature(lib)
 
 
-def _get_macos_min_version(dylib_path: Path) -> Iterator[tuple[str, Version]]:
+def _get_macos_min_version(
+    dylib_path: str | os.PathLike[str],
+) -> Iterator[tuple[str, Version]]:
     """Get the minimum macOS version from a dylib file.
 
     Parameters
     ----------
-    dylib_path : Path
+    dylib_path : str or PathLike
         The path to the dylib file.
 
     Yields
@@ -621,9 +615,18 @@ def _get_macos_min_version(dylib_path: Path) -> Iterator[tuple[str, Version]]:
     Version
         The minimum macOS version.
     """
-    if not _is_macho_file(dylib_path):
-        return
-    for header in MachO(dylib_path).headers:
+    try:
+        macho = MachO(dylib_path)
+    except struct.error:  # Parse error duing macholib's parsing
+        return  # Not a recognised Mach-O object file
+    except ValueError as exc:  # Raised by macholib for parse errors
+        if str(exc.args[0]).startswith(
+            ("Unknown fat header magic", "Unknown Mach-O header")
+        ):
+            return  # Not a recognised Mach-O object file
+        raise  # pragma: no cover  # Unexpected error
+
+    for header in macho.headers:
         for cmd in header.commands:
             if cmd[0].cmd == LC_BUILD_VERSION:
                 version = cmd[1].minos
@@ -662,12 +665,20 @@ def _get_archs_and_version_from_wheel_name(
             raise ValueError(f"Invalid platform tag: {platform_tag.platform}")
         major, minor, arch = match.groups()
         platform_requirements[arch] = Version(f"{major}.{minor}")
+    # If we have a wheel name with arm64 and x86_64 we have to convert that to
+    # universal2
+    if platform_requirements.keys() == {"arm64", "x86_64"}:
+        version = platform_requirements["arm64"]
+        if version == Version("11.0"):
+            version = platform_requirements["x86_64"]
+        platform_requirements = {"universal2": version}
+
     return platform_requirements
 
 
-def _get_problematic_libs(
-    required_version: Optional[Version],
-    version_lib_dict: Dict[Version, List[Path]],
+def _get_incompatible_libs(
+    required_version: Version | None,
+    version_lib_dict: dict[Version, list[Path]],
     arch: str,
 ) -> set[tuple[Path, Version]]:
     """Find libraries which require a more modern macOS version.
@@ -706,10 +717,77 @@ def _get_problematic_libs(
     return bad_libraries
 
 
+def _unpack_architectures(
+    architecture_versions: Mapping[str, Version],
+) -> dict[str, Version]:
+    """Return architecture versions derived from their universal forms.
+
+    Examples
+    --------
+    >>> _unpack_architectures({"arm64": Version("11.0")})
+    {'arm64': <Version('11.0')>}
+    >>> _unpack_architectures({"universal2": Version("10.5")})
+    {'x86_64': <Version('10.5')>, 'arm64': <Version('11.0')>}
+    >>> _unpack_architectures({"intel": Version("10.5")})
+    {'i386': <Version('10.5')>, 'x86_64': <Version('10.5')>}
+    >>> _unpack_architectures({})
+    {}
+    """
+    architecture_versions = {**architecture_versions}
+    if "universal2" in architecture_versions:
+        architecture_versions["x86_64"] = architecture_versions["universal2"]
+        architecture_versions["arm64"] = max(
+            architecture_versions["universal2"], Version("11.0")
+        )
+        del architecture_versions["universal2"]
+    if "intel" in architecture_versions:
+        architecture_versions["i386"] = architecture_versions["intel"]
+        architecture_versions["x86_64"] = architecture_versions["intel"]
+        del architecture_versions["intel"]
+    return architecture_versions
+
+
+def _pack_architectures(
+    architecture_versions: Mapping[str, Version],
+) -> dict[str, Version]:
+    """Return architecture versions combined into their universal forms.
+
+    Examples
+    --------
+    >>> _pack_architectures({"arm64": Version("11.0")})
+    {'arm64': <Version('11.0')>}
+    >>> _pack_architectures({"i386": Version("10.5"), "x86_64": Version("10.5")})
+    {'intel': <Version('10.5')>}
+    >>> _pack_architectures({"x86_64": Version("10.5"), "arm64": Version("11.0")})
+    {'universal2': <Version('10.5')>}
+    >>> _pack_architectures({"x86_64": Version("11.0"), "arm64": Version("12.0")})
+    {'x86_64': <Version('11.0')>, 'arm64': <Version('12.0')>}
+    >>> _pack_architectures({"i386": Version("11.0"), "x86_64": Version("11.0"), "arm64": Version("11.0")})
+    {'i386': <Version('11.0')>, 'universal2': <Version('11.0')>}
+    >>> _pack_architectures({})
+    {}
+    """  # noqa: E501
+    architecture_versions = {**architecture_versions}
+    if {"x86_64", "arm64"}.issubset(architecture_versions.keys()) and (
+        architecture_versions["x86_64"] == architecture_versions["arm64"]
+        or architecture_versions["arm64"] == Version("11.0")
+    ):
+        architecture_versions["universal2"] = architecture_versions["x86_64"]
+        del architecture_versions["x86_64"]
+        del architecture_versions["arm64"]
+    if {"i386", "x86_64"}.issubset(
+        architecture_versions.keys()
+    ) and architecture_versions["i386"] == architecture_versions["x86_64"]:
+        architecture_versions["intel"] = architecture_versions["i386"]
+        del architecture_versions["i386"]
+        del architecture_versions["x86_64"]
+    return architecture_versions
+
+
 def _calculate_minimum_wheel_name(
     wheel_name: str,
     wheel_dir: Path,
-    require_target_macos_version: Optional[Version],
+    require_target_macos_version: Version | None,
 ) -> tuple[str, set[tuple[Path, Version]]]:
     """Return a wheel name with an updated platform tag.
 
@@ -730,95 +808,103 @@ def _calculate_minimum_wheel_name(
     str
         The updated wheel name.
     set[tuple[Path, Version]]
-        A set of libraries that require a more modern macOS version than the
-        provided one.
+        Any libraries requiring a more modern macOS version than
+        `require_target_macos_version`.
     """
     # get platform tag from wheel name using packaging
     if wheel_name.endswith("any.whl"):
         # universal wheel, no need to update the platform tag
         return wheel_name, set()
-    arch_version = _get_archs_and_version_from_wheel_name(wheel_name)
+    wheel_arch_version: Final = _unpack_architectures(
+        _get_archs_and_version_from_wheel_name(wheel_name)
+    )
     # get the architecture and minimum macOS version from the libraries
     # in the wheel
-    version_info_dict: Dict[str, Dict[Version, List[Path]]] = {}
+    all_library_versions: dict[str, dict[Version, list[Path]]] = {}
 
     for lib in wheel_dir.glob("**/*"):
+        if lib.is_dir():
+            continue
         for arch, version in _get_macos_min_version(lib):
-            version_info_dict.setdefault(arch.lower(), {}).setdefault(
+            all_library_versions.setdefault(arch.lower(), {}).setdefault(
                 version, []
             ).append(lib)
-    version_dkt = {
-        arch: max(version) for arch, version in version_info_dict.items()
+            logger.debug(
+                "Bundled library info: %s arch=%s target=%s",
+                lib.name,
+                arch,
+                version,
+            )
+
+    # Derive architecture requirements from bundled libraries
+    arch_version = {
+        arch: max(version_libraries.keys())
+        for arch, version_libraries in all_library_versions.items()
     }
 
-    problematic_libs: set[tuple[Path, Version]] = set()
+    # Compare libraries to target macOS version and track incompatibilities
+    incompatible_libs: set[tuple[Path, Version]] = set()
+    for arch, version_libraries in all_library_versions.items():
+        incompatible_libs.update(
+            _get_incompatible_libs(
+                require_target_macos_version, version_libraries, arch
+            )
+        )
 
-    try:
-        for arch, version in list(arch_version.items()):
-            if arch == "universal2":
-                if version_dkt["arm64"] == Version("11.0"):
-                    arch_version["universal2"] = max(
-                        version, version_dkt["x86_64"]
-                    )
-                else:
-                    arch_version["universal2"] = max(
-                        version, version_dkt["arm64"], version_dkt["x86_64"]
-                    )
-                    problematic_libs.update(
-                        _get_problematic_libs(
-                            require_target_macos_version,
-                            version_info_dict["arm64"],
-                            "arm64",
-                        )
-                    )
-                problematic_libs.update(
-                    _get_problematic_libs(
-                        require_target_macos_version,
-                        version_info_dict["x86_64"],
-                        "x86_64",
-                    )
-                )
-            elif arch == "universal":
-                arch_version["universal"] = max(
-                    version, version_dkt["i386"], version_dkt["x86_64"]
-                )
-                problematic_libs.update(
-                    _get_problematic_libs(
-                        require_target_macos_version,
-                        version_info_dict["i386"],
-                        "i386",
-                    ),
-                    _get_problematic_libs(
-                        require_target_macos_version,
-                        version_info_dict["x86_64"],
-                        "x86_64",
-                    ),
-                )
-            else:
-                arch_version[arch] = max(version, version_dkt[arch])
-                problematic_libs.update(
-                    _get_problematic_libs(
-                        require_target_macos_version,
-                        version_info_dict[arch],
-                        arch,
-                    )
-                )
-    except KeyError as e:
-        raise DelocationError(
-            f"Failed to find any binary with the required architecture: {e}"
-        ) from e
-    prefix = wheel_name.rsplit("-", 1)[0]
-    platform_tag = ".".join(
-        f"macosx_{version.major}_{version.minor}_{arch}"
-        for arch, version in arch_version.items()
+    # Sanity check, wheels tagged with architectures should have at least one
+    # bundled library matching that architecture.
+    missing_architectures: Final = (
+        wheel_arch_version.keys() - arch_version.keys()
     )
-    return f"{prefix}-{platform_tag}.whl", problematic_libs
+    if missing_architectures:
+        raise DelocationError(
+            "Failed to find any binary with the required architecture: "
+            f"""{",".join(missing_architectures)!r}"""
+        )
+
+    # Limit architecture tags to whatever the wheel already claimed to support.
+    # Use versions derived from bundled libraries instead of previous wheel tag.
+    for arch in arch_version.keys() - wheel_arch_version.keys():
+        del arch_version[arch]
+
+    # Wheel platform tags MUST use the macOS release version, not the literal
+    # version provided by macOS. Since macOS 11 the minor version number is not
+    # part of the macOS release version and MUST be zero for tagging purposes.
+    def get_macos_platform_tag(version: Version, architecture: str) -> str:
+        """Return the macOS platform tag for this version and architecture.
+
+        `version` will be converted to a release version expected by pip.
+        """
+        if require_target_macos_version is not None:
+            # Version was specified explicitly with MACOSX_DEPLOYMENT_TARGET.
+            version = max(version, require_target_macos_version)
+        elif version.major >= 11 and version.minor > 0:
+            # This is the range where an automatic version is deceptive.
+            logger.warning(
+                "Wheel will be tagged as supporting macOS %i (%s),"
+                " but will not support macOS versions older than %i.%i\n\t"
+                "Configure MACOSX_DEPLOYMENT_TARGET to suppress this warning.",
+                version.major,
+                architecture,
+                version.major,
+                version.minor,
+            )
+
+        minor: Final = 0 if version.major >= 11 else version.minor
+        return f"macosx_{version.major}_{minor}_{architecture}"
+
+    platform_tag: Final = ".".join(
+        get_macos_platform_tag(version, arch)
+        for arch, version in _pack_architectures(arch_version).items()
+    )
+    prefix: Final = wheel_name.rsplit("-", 1)[0]
+    return f"{prefix}-{platform_tag}.whl", incompatible_libs
 
 
 def _check_and_update_wheel_name(
     wheel_path: Path,
     wheel_dir: Path,
-    require_target_macos_version: Optional[Version],
+    require_target_macos_version: Version | None,
 ) -> Path:
     """Determine the minimum platform tag and update the wheel name if needed.
 
@@ -845,19 +931,31 @@ def _check_and_update_wheel_name(
             f"{lib_path} has a minimum target of {lib_macos_version}"
             for lib_path, lib_macos_version in problematic_files
         )
+        min_valid_version = max(
+            lib_macos_version for _, lib_macos_version in problematic_files
+        )
         raise DelocationError(
             "Library dependencies do not satisfy target MacOS"
             f" version {require_target_macos_version}:\n"
             f"{problematic_files_str}"
+            "\nSet the environment variable"
+            f" 'MACOSX_DEPLOYMENT_TARGET={min_valid_version}'"
+            " to update minimum supported macOS for this wheel."
         )
     if new_name != wheel_name:
         wheel_path = wheel_path.parent / new_name
     return wheel_path
 
 
+def _get_delocate_generator_header() -> tuple[str, str]:
+    """Return Delocate's version info to be appended to the WHEEL metadata."""
+    return ("Generator", f"delocate {__version__}".rstrip())
+
+
 def _update_wheelfile(wheel_dir: Path, wheel_name: str) -> None:
-    """
-    Update the WHEEL file in the wheel directory with the new platform tag.
+    """Update the WHEEL file in the wheel directory with updated metadata.
+
+    Updates the platform tag and marks the wheel as modified by delocate.
 
     Parameters
     ----------
@@ -867,32 +965,40 @@ def _update_wheelfile(wheel_dir: Path, wheel_name: str) -> None:
         The name of the wheel.
         Used for determining the new platform tag.
     """
-    platform_tag_set = parse_wheel_filename(wheel_name)[-1]
+    _name, _version, _, platform_tag_set = parse_wheel_filename(wheel_name)
     (file_path,) = wheel_dir.glob("*.dist-info/WHEEL")
-    with file_path.open(encoding="utf-8") as f:
-        lines = f.readlines()
-    with file_path.open("w", encoding="utf-8", newline="\n") as f:
-        for line in lines:
-            if line.startswith("Tag:"):
-                f.write(f"Tag: {'.'.join(str(x) for x in platform_tag_set)}\n")
-            else:
-                f.write(line)
+    info = read_pkg_info(file_path)
+    delocate_generator = _get_delocate_generator_header()
+    gen_key, gen_val = delocate_generator
+    # Update tags to match current wheel name
+    del info["Tag"]
+    info._headers = [
+        (k, v) for (k, v) in info._headers
+        if not (k.lower() == gen_key.lower() and v == gen_val)
+    ]
+    for tag in platform_tag_set:
+        info.add_header("Tag", str(tag))
+
+    # Mark wheel as modifed by this version of Delocate
+    info.add_header(*delocate_generator)
+
+    write_pkg_info(file_path, info)
 
 
 def delocate_wheel(
     in_wheel: str,
-    out_wheel: Optional[str] = None,
+    out_wheel: str | None = None,
     lib_sdir: str = ".dylibs",
-    lib_filt_func: Union[None, str, Callable[[str], bool]] = None,
-    copy_filt_func: Optional[Callable[[str], bool]] = filter_system_libs,
-    require_archs: Union[None, str, Iterable[str]] = None,
-    check_verbose: Optional[bool] = None,
+    lib_filt_func: Callable[[str], bool] | str | None = None,
+    copy_filt_func: Callable[[str], bool] | None = filter_system_libs,
+    require_archs: Iterable[str] | str | None = None,
+    check_verbose: bool | None = None,
     *,
-    executable_path: Optional[str] = None,
+    executable_path: str | None = None,
     ignore_missing: bool = False,
     sanitize_rpaths: bool = False,
-    require_target_macos_version: Optional[Version] = None,
-) -> Dict[str, Dict[str, str]]:
+    require_target_macos_version: Version | None = None,
+) -> dict[str, dict[str, str]]:
     """Update wheel by copying required libraries to `lib_sdir` in wheel.
 
     Create `lib_sdir` in wheel tree only if we are copying one or more
@@ -988,7 +1094,7 @@ def delocate_wheel(
         )
         if copied_libs and lib_path_exists_before_delocate:
             raise DelocationError(
-                "f{lib_path} already exists in wheel but need to copy "
+                f"{lib_path} already exists in wheel but need to copy "
                 + "; ".join(copied_libs)
             )
         if len(os.listdir(lib_path)) == 0:
@@ -1008,7 +1114,6 @@ def delocate_wheel(
             libraries=libraries_in_lib_path,
             install_id_prefix=DLC_PREFIX + posix_relpath(lib_sdir, wheel_dir),
         )
-        rewrite_record(wheel_dir)
         out_wheel_ = Path(out_wheel)
         out_wheel_fixed = _check_and_update_wheel_name(
             out_wheel_, Path(wheel_dir), require_target_macos_version
@@ -1016,16 +1121,21 @@ def delocate_wheel(
         if out_wheel_fixed != out_wheel_:
             out_wheel_ = out_wheel_fixed
             in_place = False
-            _update_wheelfile(Path(wheel_dir), out_wheel_.name)
+        _update_wheelfile(Path(wheel_dir), out_wheel_.name)
+        rewrite_record(wheel_dir)
         if len(copied_libs) or not in_place:
             if remove_old:
                 os.remove(in_wheel)
+                logger.info("Deleted:%s", in_wheel)
             dir2zip(wheel_dir, out_wheel_)
+            logger.info("Output:%s", out_wheel_)
     return stripped_lib_dict(copied_libs, wheel_dir + os.path.sep)
 
 
 def patch_wheel(
-    in_wheel: Text, patch_fname: Text, out_wheel: Optional[Text] = None
+    in_wheel: str | os.PathLike[str],
+    patch_fname: str | os.PathLike[str],
+    out_wheel: str | os.PathLike[str] | None = None,
 ) -> None:
     """Apply ``-p1`` style patch in `patch_fname` to contents of `in_wheel`.
 
@@ -1034,44 +1144,35 @@ def patch_wheel(
 
     Parameters
     ----------
-    in_wheel : str
+    in_wheel : str or PathLike
         Filename of wheel to process
-    patch_fname : str
+    patch_fname : str or PathLike
         Filename of patch file.  Will be applied with ``patch -p1 <
         patch_fname``
-    out_wheel : None or str
+    out_wheel : None or str or PathLike
         Filename of patched wheel to write.  If None, overwrite `in_wheel`
     """
-    in_wheel = abspath(in_wheel)
-    patch_fname = abspath(patch_fname)
-    if out_wheel is None:
-        out_wheel = in_wheel
-    else:
-        out_wheel = abspath(out_wheel)
-    if not exists(patch_fname):
-        raise ValueError("patch file {0} does not exist".format(patch_fname))
+    in_wheel = Path(in_wheel).resolve(strict=True)
+    patch_fname = Path(patch_fname).resolve(strict=True)
+    out_wheel = Path(out_wheel).resolve() if out_wheel is not None else in_wheel
     with InWheel(in_wheel, out_wheel):
-        with open(patch_fname, "rb") as fobj:
+        with open(patch_fname, "rb") as f:
             patch_proc = Popen(
-                ["patch", "-p1"], stdin=fobj, stdout=PIPE, stderr=PIPE
+                ["patch", "-p1"], stdin=f, stdout=PIPE, stderr=PIPE, text=True
             )
-            stdout, stderr = patch_proc.communicate()
+            stdout, _stderr = patch_proc.communicate()
             if patch_proc.returncode != 0:
-                raise RuntimeError(
-                    "Patch failed with stdout:\n" + stdout.decode("latin1")
-                )
+                raise RuntimeError(f"Patch failed with stdout:\n{stdout}")
 
 
 _ARCH_LOOKUP = {"intel": ["i386", "x86_64"], "universal2": ["x86_64", "arm64"]}
 
 
 def check_archs(
-    copied_libs: Mapping[Text, Mapping[Text, Text]],
-    require_archs: Union[Text, Iterable[Text]] = (),
+    copied_libs: Mapping[str, Mapping[str, str]],
+    require_archs: str | Iterable[str] = (),
     stop_fast: bool = False,
-) -> Set[
-    Union[Tuple[Text, FrozenSet[Text]], Tuple[Text, Text, FrozenSet[Text]]]
-]:
+) -> set[tuple[str, frozenset[str]] | tuple[str, str, frozenset[str]]]:
     """Check compatibility of archs in `copied_libs` dict.
 
     Parameters
@@ -1114,8 +1215,8 @@ def check_archs(
     if isinstance(require_archs, str):
         require_archs = _ARCH_LOOKUP.get(require_archs, [require_archs])
     require_archs_set = frozenset(require_archs)
-    bads: List[
-        Union[Tuple[Text, FrozenSet[Text]], Tuple[Text, Text, FrozenSet[Text]]]
+    bads: list[
+        tuple[str, frozenset[str]] | tuple[str, str, frozenset[str]]
     ] = []
     for depended_lib, dep_dict in copied_libs.items():
         depended_archs = get_archs(depended_lib)
@@ -1168,7 +1269,7 @@ def bads_report(bads, path_prefix=None):
         if len(result) == 3:
             depended_lib, depending_lib, missing_archs = result
             reports.append(
-                "{0} needs {1} {2} missing from {3}".format(
+                "{} needs {} {} missing from {}".format(
                     path_processor(depending_lib),
                     "archs" if len(missing_archs) > 1 else "arch",
                     ", ".join(sorted(missing_archs)),
@@ -1178,7 +1279,7 @@ def bads_report(bads, path_prefix=None):
         elif len(result) == 2:
             depending_lib, missing_archs = result
             reports.append(
-                "Required {0} {1} missing from {2}".format(
+                "Required {} {} missing from {}".format(
                     "archs" if len(missing_archs) > 1 else "arch",
                     ", ".join(sorted(missing_archs)),
                     path_processor(depending_lib),
