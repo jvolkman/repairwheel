@@ -11,6 +11,73 @@ from repairwheel.linux.repair import _detect_libc_and_musl_policy, _parse_platfo
 
 pytestmark = pytest.mark.skipif(sys.platform != "linux", reason="Linux-only tests")
 
+# GNU strip/objcopy (BFD) older than 2.44 mis-lay out PT_LOAD segments that contain
+# the PHDR table when it isn't at the start of the file, corrupting valid ELF files.
+# See https://sourceware.org/bugzilla/show_bug.cgi?id=32946.
+MIN_GNU_STRIP_VERSION = (2, 44)
+# llvm-strip 18 breaks p_offset/p_vaddr congruence for a PT_LOAD that shares its
+# offset with PT_PHDR (executables); 19+ handles it.
+MIN_LLVM_STRIP_VERSION = (19,)
+
+
+def _tool_version(path: str, marker: str) -> tuple[int, ...] | None:
+    """Parse the version from `path --version` if its output contains `marker`."""
+    import re
+    import subprocess
+
+    out = subprocess.run([path, "--version"], capture_output=True, text=True).stdout
+    if marker not in out:
+        return None
+    pattern = r"GNU strip.*?(\d+)\.(\d+)" if marker == "GNU strip" else r"LLVM version (\d+)\.(\d+)"
+    match = re.search(pattern, out)
+    return tuple(int(g) for g in match.groups()) if match else None
+
+
+def _find_llvm_strip() -> tuple[str, tuple[int, ...]] | None:
+    """Return the newest llvm-strip on PATH, including versioned names like llvm-strip-20."""
+    import glob
+    import os
+    import shutil
+
+    paths = {p for p in [shutil.which("llvm-strip")] if p}
+    for d in os.environ.get("PATH", "").split(os.pathsep):
+        paths.update(p for p in glob.glob(os.path.join(d, "llvm-strip-[0-9]*")) if os.access(p, os.X_OK))
+    found = [(v, p) for p in paths if (v := _tool_version(p, "LLVM version"))]
+    return (max(found)[1], max(found)[0]) if found else None
+
+
+@pytest.fixture(params=["gnu", "llvm"])
+def strip_tool(request) -> str:
+    """Path to a strip implementation that handles spec-valid relocated PHDR tables.
+
+    Tool paths can be overridden with REPAIRWHEEL_TEST_GNU_STRIP / REPAIRWHEEL_TEST_LLVM_STRIP.
+    If REPAIRWHEEL_TEST_REQUIRE_STRIP is set, a missing or too-old tool fails instead of skipping.
+    """
+    import os
+    import shutil
+
+    if request.param == "gnu":
+        name, minimum, note = "GNU strip", MIN_GNU_STRIP_VERSION, " (binutils bug 32946)"
+        path = os.environ.get("REPAIRWHEEL_TEST_GNU_STRIP") or shutil.which("strip")
+        version = _tool_version(path, "GNU strip") if path else None
+    else:
+        name, minimum, note = "llvm-strip", MIN_LLVM_STRIP_VERSION, ""
+        path = os.environ.get("REPAIRWHEEL_TEST_LLVM_STRIP")
+        version = _tool_version(path, "LLVM version") if path else None
+        if not path and (found := _find_llvm_strip()):
+            path, version = found
+
+    if version is None:
+        reason = f"{name} not found"
+    elif version < minimum:
+        reason = f"{name} {'.'.join(map(str, version))} < {'.'.join(map(str, minimum))}{note}"
+    else:
+        return path
+
+    if os.environ.get("REPAIRWHEEL_TEST_REQUIRE_STRIP"):
+        pytest.fail(reason)
+    pytest.skip(reason)
+
 
 class TestPatchLoadLdPaths:
     """Verify the load_ld_paths monkeypatch matches auditwheel's expected signature."""
@@ -503,15 +570,15 @@ class TestElfFileAndPatcher:
         res2 = subprocess.run([sys.executable, "-c", check_code_both], capture_output=True, text=True)
         assert res2.returncode == 0, f"Loading patched ELF after second removal failed (rc={res2.returncode}): {res2.stderr}"
 
-    def test_strip_patched_elf_shared_lib_and_executables(self, tmp_path: Path):
+    def test_strip_patched_elf_shared_lib_and_executables(self, tmp_path: Path, strip_tool: str):
         import shutil
         import subprocess
         from repairwheel.linux.elffile import ElfFile
 
         cc = shutil.which("cc") or shutil.which("gcc")
-        strip = shutil.which("strip")
-        if not cc or not strip:
-            pytest.skip("cc and strip required for ELF strip test")
+        strip = strip_tool
+        if not cc:
+            pytest.skip("cc required for ELF strip test")
 
         # Include enough symbols/debug info so non-alloc sections exceed a 4KB page
         funcs = "\n".join(f"int helper_symbol_{i}(int x) {{ return x + {i}; }}" for i in range(150))
@@ -588,7 +655,7 @@ class TestElfFileAndPatcher:
                 run_post = subprocess.run([str(exe_cycle)], capture_output=True, text=True)
                 assert run_post.returncode == 0 and run_post.stdout.strip() == "42"
 
-    def test_strip_patched_elf_unmapped_phdrs_and_old_layout_migration(self, tmp_path: Path):
+    def test_strip_patched_elf_unmapped_phdrs_and_old_layout_migration(self, tmp_path: Path, strip_tool: str):
         import copy
         import io
         import shutil
@@ -597,9 +664,9 @@ class TestElfFileAndPatcher:
         from repairwheel.linux.elffile import PT_LOAD, ElfFile, PositionTracker, sizeof
 
         cc = shutil.which("cc") or shutil.which("gcc")
-        strip = shutil.which("strip")
-        if not cc or not strip:
-            pytest.skip("cc and strip required for ELF strip test")
+        strip = strip_tool
+        if not cc:
+            pytest.skip("cc required for ELF strip test")
 
         (tmp_path / "foo.c").write_text("int foo(void) { return 42; }\n")
         lib_base = tmp_path / "libfoo_base.so"

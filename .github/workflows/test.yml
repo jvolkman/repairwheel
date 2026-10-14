@@ -39,7 +39,7 @@ jobs:
 
       - name: Install system dependencies (Alpine)
         if: matrix.platform == 'alpine'
-        run: apk add --no-cache python3 python3-dev py3-pip gcc musl-dev bzip2-dev gcompat
+        run: apk add --no-cache python3 python3-dev py3-pip gcc musl-dev bzip2-dev gcompat llvm
 
       - name: Ensure latest pip
         run: python -m pip install --break-system-packages --upgrade pip
@@ -49,9 +49,19 @@ jobs:
 
       - name: Install system test dependencies (Linux Glibc)
         if: matrix.platform == 'ubuntu'
-        run: sudo apt-get update && sudo apt-get install -y libbz2-dev
+        run: |
+          sudo apt-get update && sudo apt-get install -y libbz2-dev llvm-20
+          echo "REPAIRWHEEL_TEST_LLVM_STRIP=/usr/bin/llvm-strip-20" >> "$GITHUB_ENV"
+          # Ubuntu 24.04's GNU strip (binutils 2.42) corrupts ELF files whose PHDR table
+          # isn't at the start of the file (https://sourceware.org/bugzilla/show_bug.cgi?id=32946).
+          # binutils >= 2.44 handles the patcher's layout, so test against Homebrew's binutils.
+          HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_INSTALL_CLEANUP=1 /home/linuxbrew/.linuxbrew/bin/brew install binutils
+          echo "REPAIRWHEEL_TEST_GNU_STRIP=$(/home/linuxbrew/.linuxbrew/bin/brew --prefix binutils)/bin/strip" >> "$GITHUB_ENV"
 
       - name: Run tests
+        env:
+          # Fail (rather than skip) the strip compatibility tests if a strip tool is missing.
+          REPAIRWHEEL_TEST_REQUIRE_STRIP: ${{ (matrix.platform == 'ubuntu' || matrix.platform == 'alpine') && '1' || '' }}
         run: hatch env run -e test.py${{ matrix.python-version }} test
 
   generate:
