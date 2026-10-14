@@ -71,6 +71,8 @@ PF_X = 0x1
 SHT_STRTAB = 3
 SHT_DYNAMIC = 6
 
+SHF_ALLOC = 0x2
+
 SHN_LORESERVE = 0xFF00
 SHN_XINDEX = 0xFFFF
 PN_XNUM = 0xFFFF
@@ -514,6 +516,10 @@ class PositionTracker:
         self.max_file_offset = max(self.file_offset, self.max_file_offset)
         self.vm_offset = round_to_multiple(self.vm_offset, align)
         self.max_vm_offset = max(self.vm_offset, self.max_vm_offset)
+
+    def back_to_start(self) -> None:
+        self.file_offset = self.file_start
+        self.vm_offset = self.vm_start
 
     @property
     def buf_offset(self) -> int:
@@ -1100,6 +1106,13 @@ class ElfFile:
         # Now we can write to our new buffer
         pos = PositionTracker(file_offset, vm_offset)
 
+        # Write the PHDRs at the start of the new PT_LOAD segment with placeholder
+        # values to reserve the proper amount of space. GNU BFD (used by strip and
+        # objcopy) marks any PT_LOAD segment containing e_phoff with includes_phdrs=1
+        # and assumes the PHDR table sits at the very start of that segment before
+        # any mapped sections; we'll seek back and overwrite with final values below.
+        self._write_phdrs(buf, pos, SectionInfo(0, 0, 0), add_new_load)
+
         # .dynstr
         dynstr_pos = self._write_dynstr(buf, pos, new_dynstr)
 
@@ -1119,6 +1132,7 @@ class ElfFile:
         shdr_pos = self._write_shdrs(buf, pos, dynstr_pos, dynamic_pos, verneed_pos, phdr_count)
 
         # phdrs
+        pos.back_to_start()
         phdr_pos = self._write_phdrs(buf, pos, dynamic_pos, add_new_load)
 
         return phdr_pos, shdr_pos, dynamic_pos
@@ -1218,6 +1232,46 @@ class ElfFile:
         )
         return new_load_data.getvalue() == last_load_data
 
+    def _last_load_only_has_relocated_sections(self, last_load_header: Elf_Phdr) -> bool:
+        """Returns True if last_load_header is a previously relocated trailer PT_LOAD
+        segment containing only the PHDRs and/or sections relocated by _write_new_trailer
+        (.dynstr, .gnu.version_r, .dynamic).
+
+        When a previously patched binary is stripped (which appends .shstrtab/shdrs
+        after last_load_header) and then patched again, _can_overwrite_last_load
+        returns False. Reusing last_load_header's Phdr entry in that case avoids
+        leaving behind an empty PT_LOAD segment that a subsequent `strip` would
+        delete from the PHDR table (shrinking e_phnum and misaligning the segment).
+        """
+        contains_phdrs = last_load_header.p_offset <= self.ehdr.e_phoff < last_load_header.p_offset + last_load_header.p_filesz
+        contains_dynstr = False
+
+        relocated = {b".dynstr", b".gnu.version_r", b".dynamic"}
+        for shdr, name in zip(self.shdrs, self.shdr_names, strict=False):
+            if not (shdr.sh_flags & SHF_ALLOC):
+                continue
+            in_vaddr = last_load_header.p_vaddr <= shdr.sh_addr < last_load_header.p_vaddr + last_load_header.p_memsz
+            in_offset = last_load_header.p_offset <= shdr.sh_offset < last_load_header.p_offset + last_load_header.p_filesz
+            if not (in_vaddr or in_offset):
+                continue
+            if name not in relocated:
+                return False
+            contains_dynstr |= name == b".dynstr"
+
+        if not (contains_phdrs or contains_dynstr):
+            return False
+
+        for phdr in self.phdrs:
+            if phdr is last_load_header or phdr.p_type in (PT_LOAD, PT_DYNAMIC, PT_PHDR) or phdr.p_memsz == 0:
+                continue
+            if (
+                phdr.p_vaddr < last_load_header.p_vaddr + last_load_header.p_memsz
+                and phdr.p_vaddr + phdr.p_memsz > last_load_header.p_vaddr
+            ):
+                return False
+
+        return True
+
     def rewrite(
         self,
         new_soname: bytes | None = None,
@@ -1242,13 +1296,15 @@ class ElfFile:
             new_offset = last_load_header.p_offset
             new_vm_offset = last_load_header.p_vaddr
             add_new_load = False
+            pad_from_end = False
         else:
             vm_max = last_load_header.p_vaddr + last_load_header.p_memsz
             # Our first section will be the PHDRs which are aligned to Elf_Off.
             new_offset = round_to_multiple(file_end, page_size)
             # Then make our vm addr match
             new_vm_offset = congruent_vm_addr(new_offset, vm_max, page_size)
-            add_new_load = True
+            add_new_load = not self._last_load_only_has_relocated_sections(last_load_header)
+            pad_from_end = True
 
         buf = io.BytesIO()
         phdr_pos, shdr_pos, dynamic_pos = self._write_new_trailer(
@@ -1262,7 +1318,7 @@ class ElfFile:
             add_new_load=add_new_load,
         )
 
-        if add_new_load:
+        if pad_from_end:
             # Zero pad to the start of our new page
             fzero(self._fh, file_end, new_offset - file_end)
 
@@ -1345,11 +1401,62 @@ def congruent_vm_addr(file_offset: int, vm_start: int, page_size: int) -> int:
 
 
 if __name__ == "__main__":
-    import sys
+    import argparse
 
-    with open(sys.argv[1], "r+b") as f:
+    parser = argparse.ArgumentParser(description="Inspect and patch ELF shared libraries and executables.")
+    parser.add_argument("file", help="Path to the ELF file")
+    parser.add_argument("--print-soname", action="store_true", help="Print DT_SONAME")
+    parser.add_argument("--print-rpath", action="store_true", help="Print DT_RPATH / DT_RUNPATH")
+    parser.add_argument("--print-needed", action="store_true", help="Print DT_NEEDED entries")
+    parser.add_argument("--set-soname", type=str, default=None, help="Set DT_SONAME")
+    parser.add_argument("--set-rpath", type=str, default=None, help="Set DT_RPATH")
+    parser.add_argument("--clear-rpath", action="store_true", help="Clear DT_RPATH / DT_RUNPATH")
+    parser.add_argument(
+        "--replace-needed",
+        nargs=2,
+        action="append",
+        metavar=("OLD", "NEW"),
+        default=[],
+        help="Replace DT_NEEDED entry OLD with NEW",
+    )
+    parser.add_argument(
+        "--remove-needed",
+        action="append",
+        metavar="NAME",
+        default=[],
+        help="Remove DT_NEEDED entry NAME",
+    )
+    args = parser.parse_args()
+
+    new_soname = args.set_soname.encode("utf-8") if args.set_soname is not None else None
+    if args.clear_rpath:
+        new_rpath: bytes | None = b""
+    elif args.set_rpath is not None:
+        new_rpath = args.set_rpath.encode("utf-8")
+    else:
+        new_rpath = None
+    needed_replacements = {old.encode("utf-8"): new.encode("utf-8") for old, new in args.replace_needed}
+    needed_removals = {name.encode("utf-8") for name in args.remove_needed}
+
+    is_mutating = bool(new_soname is not None or new_rpath is not None or needed_replacements or needed_removals)
+    mode = "r+b" if is_mutating else "rb"
+    with open(args.file, mode) as f:
         ef = ElfFile(f)
-        ef.rewrite(new_soname=b"foojfkdlsjklfjdskjfkdslfds")
-        ef.rewrite(new_rpath=b"/tmp")
-        ef.rewrite(new_soname=b"foo")
-        ef.rewrite(new_soname=b"foobar")
+        if is_mutating:
+            ef.rewrite(
+                new_soname=new_soname,
+                new_rpath=new_rpath,
+                needed_replacements=needed_replacements,
+                needed_removals=needed_removals,
+            )
+        if args.print_soname:
+            for d in ef.dyn:
+                if d.d_tag == DT_SONAME:
+                    print(get_strtab_entry(ef.dynstr, d.d_ptr_or_val).decode("utf-8"))
+        if args.print_rpath:
+            rpath = ef.runpath or ef.rpath or b""
+            print(rpath.decode("utf-8"))
+        if args.print_needed:
+            for d in ef.dyn:
+                if d.d_tag == DT_NEEDED:
+                    print(get_strtab_entry(ef.dynstr, d.d_ptr_or_val).decode("utf-8"))

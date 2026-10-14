@@ -502,3 +502,221 @@ class TestElfFileAndPatcher:
         )
         res2 = subprocess.run([sys.executable, "-c", check_code_both], capture_output=True, text=True)
         assert res2.returncode == 0, f"Loading patched ELF after second removal failed (rc={res2.returncode}): {res2.stderr}"
+
+    def test_strip_patched_elf_shared_lib_and_executables(self, tmp_path: Path):
+        import shutil
+        import subprocess
+        from repairwheel.linux.elffile import ElfFile
+
+        cc = shutil.which("cc") or shutil.which("gcc")
+        strip = shutil.which("strip")
+        if not cc or not strip:
+            pytest.skip("cc and strip required for ELF strip test")
+
+        # Include enough symbols/debug info so non-alloc sections exceed a 4KB page
+        funcs = "\n".join(f"int helper_symbol_{i}(int x) {{ return x + {i}; }}" for i in range(150))
+        (tmp_path / "foo.c").write_text(funcs + "\nint foo(void) { return 42; }\n")
+        (tmp_path / "main.c").write_text(
+            "#include <stdio.h>\n"
+            + funcs
+            + '\nint foo(void);\nint main(void) { printf("%d\\n", foo()); return foo() == 42 ? 0 : 1; }\n'
+        )
+
+        libfoo = tmp_path / "libfoo.so"
+        subprocess.check_call([cc, "-shared", "-fPIC", "-g", str(tmp_path / "foo.c"), "-o", str(libfoo)])
+
+        with open(libfoo, "r+b") as fh:
+            ef = ElfFile(fh)
+            ef.rewrite(new_soname=b"libfoo.so", new_rpath=b"$ORIGIN")
+
+        strip_lib = subprocess.run([strip, str(libfoo)], capture_output=True, text=True, check=True)
+        assert strip_lib.stderr == ""
+        load_res = subprocess.run(
+            [sys.executable, "-c", f"import ctypes; lib = ctypes.CDLL({str(libfoo)!r}); assert lib.foo() == 42"],
+            capture_output=True,
+            text=True,
+        )
+        assert load_res.returncode == 0, f"Stripped libfoo.so failed to load (rc={load_res.returncode}): {load_res.stderr}"
+
+        for label, link_flags in [("pie", ["-g"]), ("nopie", ["-no-pie", "-g"])]:
+            exe_base = tmp_path / f"main_{label}"
+            subprocess.check_call([cc, *link_flags, str(tmp_path / "main.c"), f"-L{tmp_path}", "-lfoo", "-o", str(exe_base)])
+
+            # Test multiple rewrites followed by various strip modes
+            for strip_args in [[], ["-s"], ["--strip-debug"], ["--strip-unneeded"]]:
+                exe = tmp_path / f"main_{label}_{'_'.join(strip_args) or 'default'}"
+                shutil.copy(exe_base, exe)
+                with open(exe, "r+b") as fh:
+                    ef = ElfFile(fh)
+                    ef.rewrite(new_soname=b"long_placeholder_soname_value")
+                    ef.rewrite(new_rpath=b"$ORIGIN")
+                    ef.rewrite(new_soname=b"short")
+                strip_res = subprocess.run([strip, *strip_args, str(exe)], capture_output=True, text=True, check=True)
+                assert strip_res.stderr == ""
+                run_res = subprocess.run([str(exe)], capture_output=True, text=True)
+                assert run_res.returncode == 0 and run_res.stdout.strip() == "42"
+
+            # Test repeated (rewrite -> strip) cycles to ensure no empty PT_LOAD segment is left behind
+            exe_cycle = tmp_path / f"main_{label}_cycle"
+            shutil.copy(exe_base, exe_cycle)
+            expected_phnum = None
+            expected_load_count = None
+            for i in range(3):
+                with open(exe_cycle, "r+b") as fh:
+                    ef = ElfFile(fh)
+                    ef.rewrite(new_rpath=f"$ORIGIN:{i}".encode())
+                    cur_phnum = len(ef.phdrs)
+                    cur_load_count = sum(1 for p in ef.phdrs if p.p_type == 1)  # PT_LOAD
+                if expected_phnum is None:
+                    expected_phnum = cur_phnum
+                    expected_load_count = cur_load_count
+                else:
+                    assert cur_phnum == expected_phnum
+                    assert cur_load_count == expected_load_count
+
+                # Second rewrite with same args must be byte-identical (post-strip idempotency)
+                bytes_after_first_rewrite = exe_cycle.read_bytes()
+                with open(exe_cycle, "r+b") as fh:
+                    ef = ElfFile(fh)
+                    ef.rewrite(new_rpath=f"$ORIGIN:{i}".encode())
+                assert exe_cycle.read_bytes() == bytes_after_first_rewrite
+
+                run_pre = subprocess.run([str(exe_cycle)], capture_output=True, text=True)
+                assert run_pre.returncode == 0 and run_pre.stdout.strip() == "42"
+                strip_cycle = subprocess.run([strip, str(exe_cycle)], capture_output=True, text=True, check=True)
+                assert strip_cycle.stderr == ""
+                run_post = subprocess.run([str(exe_cycle)], capture_output=True, text=True)
+                assert run_post.returncode == 0 and run_post.stdout.strip() == "42"
+
+    def test_strip_patched_elf_unmapped_phdrs_and_old_layout_migration(self, tmp_path: Path):
+        import copy
+        import io
+        import shutil
+        import subprocess
+        from repairwheel.fileutil import round_to_multiple
+        from repairwheel.linux.elffile import PT_LOAD, ElfFile, PositionTracker, sizeof
+
+        cc = shutil.which("cc") or shutil.which("gcc")
+        strip = shutil.which("strip")
+        if not cc or not strip:
+            pytest.skip("cc and strip required for ELF strip test")
+
+        (tmp_path / "foo.c").write_text("int foo(void) { return 42; }\n")
+        lib_base = tmp_path / "libfoo_base.so"
+        subprocess.check_call([cc, "-shared", "-fPIC", "-g", str(tmp_path / "foo.c"), "-o", str(lib_base)])
+
+        # 1. Trailer PT_LOAD containing relocated .dynstr/.dynamic while e_phoff is moved to unmapped EOF
+        lib_unmapped_phdrs = tmp_path / "libfoo_unmapped_phdrs.so"
+        shutil.copy(lib_base, lib_unmapped_phdrs)
+        with open(lib_unmapped_phdrs, "r+b") as fh:
+            ef = ElfFile(fh)
+            ef.rewrite(new_rpath=b"$ORIGIN")
+            phdr_count_after_first = len(ef.phdrs)
+            load_count_after_first = sum(1 for p in ef.phdrs if p.p_type == PT_LOAD)
+
+            # Copy PHDR table to 8-aligned unmapped space at EOF and point e_phoff there
+            phdr_bytes_len = len(ef.phdrs) * sizeof(ef._class.Phdr)
+            fh.seek(ef.ehdr.e_phoff)
+            raw_phdrs = fh.read(phdr_bytes_len)
+            fh.seek(0, io.SEEK_END)
+            eof_aligned = round_to_multiple(fh.tell(), ef._class.alignment)
+            fh.seek(eof_aligned)
+            fh.write(raw_phdrs)
+            hdr = copy.deepcopy(ef.ehdr)
+            hdr.e_phoff = eof_aligned
+            fh.seek(0)
+            hdr.to_fileobj(fh)
+
+        # Re-patch, strip, and verify phnum/PT_LOAD count remain constant and library loads
+        with open(lib_unmapped_phdrs, "r+b") as fh:
+            ef = ElfFile(fh)
+            ef.rewrite(new_rpath=b"$ORIGIN/lib")
+            assert len(ef.phdrs) == phdr_count_after_first
+            assert sum(1 for p in ef.phdrs if p.p_type == PT_LOAD) == load_count_after_first
+
+        strip_res = subprocess.run([strip, str(lib_unmapped_phdrs)], capture_output=True, text=True, check=True)
+        assert strip_res.stderr == ""
+        load_res = subprocess.run(
+            [sys.executable, "-c", f"import ctypes; lib = ctypes.CDLL({str(lib_unmapped_phdrs)!r}); assert lib.foo() == 42"],
+            capture_output=True,
+            text=True,
+        )
+        assert load_res.returncode == 0, f"Stripped lib failed to load (rc={load_res.returncode}): {load_res.stderr}"
+
+        # Post-strip re-patching is byte-identical on second pass
+        with open(lib_unmapped_phdrs, "r+b") as fh:
+            ef = ElfFile(fh)
+            ef.rewrite(new_rpath=b"$ORIGIN/lib2")
+        bytes_pass1 = lib_unmapped_phdrs.read_bytes()
+        with open(lib_unmapped_phdrs, "r+b") as fh:
+            ef = ElfFile(fh)
+            ef.rewrite(new_rpath=b"$ORIGIN/lib2")
+        assert lib_unmapped_phdrs.read_bytes() == bytes_pass1
+
+        # 2. Migration from old layout (PHDRs at the end of the trailer PT_LOAD segment)
+        lib_old_layout = tmp_path / "libfoo_old_layout.so"
+        shutil.copy(lib_base, lib_old_layout)
+        orig_write_new_trailer = ElfFile._write_new_trailer
+
+        def old_layout_trailer(
+            self,
+            buf,
+            file_offset,
+            vm_offset,
+            new_soname=None,
+            new_rpath=None,
+            needed_replacements=None,
+            needed_removals=None,
+            add_new_load=False,
+        ):
+            # Reproduce old layout by writing without initial PHDR reservation and without back_to_start
+            orig_back_to_start = PositionTracker.back_to_start
+            call_count = 0
+            orig_write_phdrs = ElfFile._write_phdrs
+
+            def skip_first_write_phdrs(self_ef, b, pos, dyn_pos, add_load):
+                nonlocal call_count
+                call_count += 1
+                if call_count == 1:
+                    return None
+                return orig_write_phdrs(self_ef, b, pos, dyn_pos, add_load)
+
+            PositionTracker.back_to_start = lambda self_pos: None
+            ElfFile._write_phdrs = skip_first_write_phdrs
+            try:
+                return orig_write_new_trailer(
+                    self,
+                    buf,
+                    file_offset,
+                    vm_offset,
+                    new_soname,
+                    new_rpath,
+                    needed_replacements,
+                    needed_removals,
+                    add_new_load,
+                )
+            finally:
+                PositionTracker.back_to_start = orig_back_to_start
+                ElfFile._write_phdrs = orig_write_phdrs
+
+        with open(lib_old_layout, "r+b") as fh:
+            ef = ElfFile(fh)
+            ElfFile._write_new_trailer = old_layout_trailer
+            try:
+                ef.rewrite(new_rpath=b"$ORIGIN")
+            finally:
+                ElfFile._write_new_trailer = orig_write_new_trailer
+
+        # Re-patch old-layout binary with current code, strip, and verify it loads cleanly
+        with open(lib_old_layout, "r+b") as fh:
+            ef = ElfFile(fh)
+            ef.rewrite(new_rpath=b"$ORIGIN/migrated")
+
+        strip_migrated = subprocess.run([strip, str(lib_old_layout)], capture_output=True, text=True, check=True)
+        assert strip_migrated.stderr == ""
+        load_migrated = subprocess.run(
+            [sys.executable, "-c", f"import ctypes; lib = ctypes.CDLL({str(lib_old_layout)!r}); assert lib.foo() == 42"],
+            capture_output=True,
+            text=True,
+        )
+        assert load_migrated.returncode == 0, f"Migrated stripped lib failed to load (rc={load_migrated.returncode})"
