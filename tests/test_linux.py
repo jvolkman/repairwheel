@@ -250,3 +250,255 @@ class TestLinuxRepairSignature:
         # Calling with exclude list
         linux_repair.repair(fake_wheel, tmp_path / "out", [], True, exclude=["foo.so"])
         assert recorded["exclude"] == frozenset(["foo.so"])
+
+
+class TestElfFileAndPatcher:
+    """Unit tests for ElfFile, RepairWheelElfPatcher, and fileutil helpers."""
+
+    def test_fileutil_fmove_and_fzero_edge_cases(self, tmp_path: Path):
+        from repairwheel.fileutil import fmove, fzero
+
+        path = tmp_path / "data.bin"
+        path.write_bytes(b"0123456789abcdef")
+
+        with open(path, "r+b") as fh:
+            # No-op cases
+            fzero(fh, 4, 0)
+            fzero(fh, 4, -5)
+            fmove(fh, 2, 2, 8)
+            fmove(fh, 0, 4, 0)
+            fh.seek(0)
+            assert fh.read() == b"0123456789abcdef"
+
+            # Moving past EOF raises EOFError
+            with pytest.raises(EOFError):
+                fmove(fh, 0, 10, 10)
+            with pytest.raises(EOFError):
+                fmove(fh, 12, 10, 10)
+
+    def test_patcher_handles_readonly_binary(self, orig_linux_x86_64_wheel, tmp_path: Path):
+        import shutil
+        import stat
+        from repairwheel.linux.patcher import RepairWheelElfPatcher
+
+        so_src = orig_linux_x86_64_wheel.lib_dir / "libtestdep.so"
+        so_copy = tmp_path / "libtestdep.so"
+        shutil.copyfile(so_src, so_copy)
+        so_copy.chmod(stat.S_IRUSR | stat.S_IRGRP | stat.S_IROTH)
+
+        patcher = RepairWheelElfPatcher()
+        assert patcher.get_rpath(so_copy) == ""
+        patcher.set_soname(so_copy, "libtestdep-patched.so")
+        patcher.set_rpath(so_copy, "$ORIGIN/.libs")
+        assert patcher.get_rpath(so_copy) == "$ORIGIN/.libs"
+        # Permission bits should be restored after patching
+        assert (so_copy.stat().st_mode & 0o777) == 0o444
+
+    def test_elffile_remove_versioned_needed(self, orig_linux_x86_64_wheel, tmp_path: Path):
+        from repairwheel.linux.elffile import (
+            DT_NEEDED,
+            DT_VERNEED,
+            DT_VERNEEDNUM,
+            ElfFile,
+            VerneedEntry,
+            get_strtab_entry,
+            sizeof,
+        )
+
+        so_src = orig_linux_x86_64_wheel.lib_dir / "libtestdep.so"
+        so_copy = tmp_path / "libtestdep_verneed.so"
+        # Repurpose the 14-byte '.debug_aranges' section name in .shstrtab as '.gnu.version_r'
+        so_bytes = so_src.read_bytes().replace(b".debug_aranges", b".gnu.version_r", 1)
+        so_copy.write_bytes(so_bytes)
+
+        # Populate the .gnu.version_r section and two versioned DT_NEEDED dependencies
+        # into ElfFile to exercise partial and complete removal of versioned dependencies.
+        with open(so_copy, "r+b") as fh:
+            ef = ElfFile(fh)
+            verneed_shdr = ef.get_shdr(b".gnu.version_r")
+            verneed_shdr.sh_type = 0x6FFFFFFE  # SHT_GNU_verneed
+            verneed_shdr.sh_link = ef.shdr_names.index(b".dynstr")
+            verneed_shdr.sh_addralign = ef._class.alignment
+            ef.dyn.insert(0, ef._class.Dyn(d_tag=DT_NEEDED, d_ptr_or_val=0))
+            ef.verneed_entries = [
+                VerneedEntry(
+                    verneed=ef._class.Verneed(
+                        vn_version=1,
+                        vn_cnt=1,
+                        vn_file=0,
+                        vn_aux=sizeof(ef._class.Verneed),
+                        vn_next=0,
+                    ),
+                    vernaux=[
+                        ef._class.Vernaux(
+                            vna_hash=0x1234,
+                            vna_flags=0,
+                            vna_other=2,
+                            vna_name=0,
+                            vna_next=0,
+                        )
+                    ],
+                    verneed_name=b"libfoo.so.1",
+                    vernaux_names=[b"FOO_1.0"],
+                ),
+                VerneedEntry(
+                    verneed=ef._class.Verneed(
+                        vn_version=1,
+                        vn_cnt=1,
+                        vn_file=0,
+                        vn_aux=sizeof(ef._class.Verneed),
+                        vn_next=0,
+                    ),
+                    vernaux=[
+                        ef._class.Vernaux(
+                            vna_hash=0x5678,
+                            vna_flags=0,
+                            vna_other=3,
+                            vna_name=0,
+                            vna_next=0,
+                        )
+                    ],
+                    verneed_name=b"libbar.so.1",
+                    vernaux_names=[b"BAR_1.0"],
+                ),
+            ]
+            ef.rewrite(needed_replacements={b"": b"libfoo.so.1"})
+
+        with open(so_copy, "r+b") as fh:
+            ef = ElfFile(fh)
+            assert [ve.verneed_name for ve in ef.verneed_entries] == [b"libfoo.so.1", b"libbar.so.1"]
+
+            # Partial removal: remove libfoo.so.1, keeping libbar.so.1
+            ef.rewrite(needed_removals={b"libfoo.so.1"})
+            assert [ve.verneed_name for ve in ef.verneed_entries] == [b"libbar.so.1"]
+            needed = [get_strtab_entry(ef.dynstr, d.d_ptr_or_val) for d in ef.dyn if d.d_tag == DT_NEEDED]
+            assert b"libfoo.so.1" not in needed
+
+            # Complete removal of remaining versioned dependency: remove libbar.so.1
+            ef.rewrite(needed_removals={b"libbar.so.1"})
+            assert ef.verneed_entries == []
+            dyn_tags = {d.d_tag for d in ef.dyn}
+            assert DT_VERNEED not in dyn_tags
+            assert DT_VERNEEDNUM not in dyn_tags
+
+            # Subsequent rewrite should still succeed cleanly and overwrite last PT_LOAD
+            ef.rewrite(new_rpath=b"$ORIGIN")
+            assert ef.rpath == b"$ORIGIN"
+
+    def test_elffile_remove_versioned_needed_end_to_end(self, tmp_path: Path):
+        import shutil
+        import subprocess
+        from repairwheel.linux.elffile import DT_NEEDED, DT_VERNEED, DT_VERNEEDNUM, DT_VERSYM, ElfFile, get_strtab_entry
+
+        cc = shutil.which("cc") or shutil.which("gcc")
+        if not cc:
+            pytest.skip("C compiler required for end-to-end versioned DT_NEEDED test")
+
+        # Build libfoo.so.1 with versioned symbol foo@@FOO_1.0
+        (tmp_path / "foo.c").write_text("int foo(void) { return 1; }\n")
+        (tmp_path / "foo.map").write_text("FOO_1.0 { global: foo; local: *; };\n")
+        libfoo = tmp_path / "libfoo.so.1"
+        subprocess.check_call(
+            [
+                cc,
+                "-shared",
+                "-fPIC",
+                "-Wl,-soname,libfoo.so.1",
+                f"-Wl,--version-script,{tmp_path / 'foo.map'}",
+                "-o",
+                str(libfoo),
+                str(tmp_path / "foo.c"),
+            ]
+        )
+        (tmp_path / "libfoo.so").symlink_to(libfoo)
+
+        # Build libbar.so.1 with versioned symbol bar@@BAR_1.0
+        (tmp_path / "bar.c").write_text("int bar(void) { return 2; }\n")
+        (tmp_path / "bar.map").write_text("BAR_1.0 { global: bar; local: *; };\n")
+        libbar = tmp_path / "libbar.so.1"
+        subprocess.check_call(
+            [
+                cc,
+                "-shared",
+                "-fPIC",
+                "-Wl,-soname,libbar.so.1",
+                f"-Wl,--version-script,{tmp_path / 'bar.map'}",
+                "-o",
+                str(libbar),
+                str(tmp_path / "bar.c"),
+            ]
+        )
+        (tmp_path / "libbar.so").symlink_to(libbar)
+
+        # Build libm2.so with -nostdlib so .gnu.version_r contains only libfoo.so.1 and libbar.so.1
+        (tmp_path / "m2.c").write_text(
+            "extern int foo(void); extern int bar(void); int call(void) { return foo() * 10 + bar(); }\n"
+        )
+        libm2 = tmp_path / "libm2.so"
+        subprocess.check_call(
+            [
+                cc,
+                "-shared",
+                "-fPIC",
+                "-nostdlib",
+                "-o",
+                str(libm2),
+                str(tmp_path / "m2.c"),
+                f"-L{tmp_path}",
+                "-Wl,--no-as-needed",
+                "-lfoo",
+                "-lbar",
+                f"-Wl,-rpath,{tmp_path}",
+            ]
+        )
+
+        # Identify which of libfoo.so.1 / libbar.so.1 has the highest vna_other index in .gnu.version_r
+        with open(libm2, "r+b") as fh:
+            ef = ElfFile(fh)
+            overall_max_idx = max(vna.vna_other for ve in ef.verneed_entries for vna in ve.vernaux)
+            verneed_by_max_idx = sorted(
+                (max(vna.vna_other for vna in ve.vernaux), ve.verneed_name)
+                for ve in ef.verneed_entries
+                if ve.verneed_name in (b"libfoo.so.1", b"libbar.so.1")
+            )
+            assert len(verneed_by_max_idx) == 2
+            highest_idx, highest_lib = verneed_by_max_idx[-1]
+            _, lower_lib = verneed_by_max_idx[0]
+            assert highest_idx == overall_max_idx
+
+            # Remove the highest-index versioned library (which previously caused ld.so to SIGSEGV)
+            ef.rewrite(needed_removals={highest_lib})
+            needed = [get_strtab_entry(ef.dynstr, d.d_ptr_or_val) for d in ef.dyn if d.d_tag == DT_NEEDED]
+            assert highest_lib not in needed
+            assert lower_lib in needed
+
+        # Load in a subprocess with the removed library preloaded via RTLD_GLOBAL
+        preload_path = tmp_path / highest_lib.decode()
+        check_code = (
+            "import ctypes; "
+            f"ctypes.CDLL({str(preload_path)!r}, ctypes.RTLD_GLOBAL); "
+            f"m = ctypes.CDLL({str(libm2)!r}); "
+            "assert m.call() == 12"
+        )
+        res = subprocess.run([sys.executable, "-c", check_code], capture_output=True, text=True)
+        assert res.returncode == 0, f"Loading patched ELF failed (rc={res.returncode}): {res.stderr}"
+
+        # Also remove the remaining versioned dependency and verify verneed is completely emptied
+        with open(libm2, "r+b") as fh:
+            ef = ElfFile(fh)
+            ef.rewrite(needed_removals={lower_lib})
+            assert ef.verneed_entries == []
+            dyn_tags = {d.d_tag for d in ef.dyn}
+            assert DT_VERNEED not in dyn_tags
+            assert DT_VERNEEDNUM not in dyn_tags
+            assert DT_VERSYM not in dyn_tags
+
+        check_code_both = (
+            "import ctypes; "
+            f"ctypes.CDLL({str(libfoo)!r}, ctypes.RTLD_GLOBAL); "
+            f"ctypes.CDLL({str(libbar)!r}, ctypes.RTLD_GLOBAL); "
+            f"m = ctypes.CDLL({str(libm2)!r}); "
+            "assert m.call() == 12"
+        )
+        res2 = subprocess.run([sys.executable, "-c", check_code_both], capture_output=True, text=True)
+        assert res2.returncode == 0, f"Loading patched ELF after second removal failed (rc={res2.returncode}): {res2.stderr}"

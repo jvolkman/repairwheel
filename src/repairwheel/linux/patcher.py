@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from repairwheel._vendor.auditwheel.patcher import ElfPatcher, ElfUpdateInfo
+from ..fileutil import writable_file
 from .elffile import ElfFile
 
 
@@ -15,7 +16,7 @@ class RepairWheelElfPatcher(ElfPatcher):
         return super().get_rpath(Path(file_name))
 
     def get_rpath_direct(self, file_name: Path | str) -> str:
-        with open(file_name, "r+b") as f:
+        with open(file_name, "rb") as f:
             ef = ElfFile(f)
             val = ef.runpath or ef.rpath
             if val:
@@ -48,7 +49,7 @@ class RepairWheelElfPatcher(ElfPatcher):
                 new_rpath = b""
 
             if new_soname is not None or new_rpath is not None or replacements or removals:
-                with open(filepath, "r+b") as f:
+                with writable_file(filepath), open(filepath, "r+b") as f:
                     ef = ElfFile(f)
                     ef.rewrite(
                         new_soname=new_soname,
