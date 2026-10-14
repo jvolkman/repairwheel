@@ -15,6 +15,8 @@ def _patch_tools():
         "_get_rpaths",
         "set_install_name",
         "set_install_id",
+        "add_rpath",
+        "_delete_rpaths",
         "get_archs",
         "replace_signature",
         "validate_signature",

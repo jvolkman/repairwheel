@@ -1,7 +1,7 @@
+from collections.abc import Iterable
 import logging
 import os
 import struct
-from typing import TypeVar
 from macholib.MachO import MachO
 from macholib.MachO import MachOHeader
 from macholib.MachO import lc_str_value
@@ -13,11 +13,17 @@ from macholib.mach_o import LC_LOAD_WEAK_DYLIB
 from macholib.mach_o import LC_REEXPORT_DYLIB
 from macholib.mach_o import LC_RPATH
 from macholib.mach_o import get_cpu_subtype
+from macholib.mach_o import load_command
+from macholib.mach_o import rpath_command
+from macholib.ptypes import sizeof
 
+from repairwheel._vendor.delocate.tools import InstallNameError
+
+from ..fileutil import ensure_writable
+from ..fileutil import round_to_multiple
 from . import machosign
 
 LOG = logging.getLogger(__name__)
-T = TypeVar("T")
 
 # Errors that we ignore when attempting to read files. Delocate will attempt
 # to read all files (e.g., py.typed) even if they aren't dylibs.
@@ -173,7 +179,8 @@ def _get_rpaths(filename: str | os.PathLike) -> dict[str, list[str]]:
     return all_rpaths
 
 
-def set_install_name(filename: str, oldname: str, newname: str, ad_hoc_sign: bool = True) -> None:
+@ensure_writable
+def set_install_name(filename: str | os.PathLike, oldname: str, newname: str, ad_hoc_sign: bool = True) -> None:
     """Set install name `oldname` to `newname` in library filename
 
     Parameters
@@ -201,15 +208,18 @@ def set_install_name(filename: str, oldname: str, newname: str, ad_hoc_sign: boo
                 header.rewriteDataForCommand(idx, newname.encode("utf-8"))
                 changed = True
 
-    if changed:
-        with open(filename, "r+b") as f:
-            macho.write(f)
+    if not changed:
+        raise InstallNameError(f"{oldname} not in install names for {filename}")
 
-        if ad_hoc_sign:
-            replace_signature(filename, "-")
+    with open(filename, "r+b") as f:
+        macho.write(f)
+
+    if ad_hoc_sign:
+        replace_signature(filename, "-")
 
 
-def set_install_id(filename: str, install_id: str, ad_hoc_sign: bool = True):
+@ensure_writable
+def set_install_id(filename: str | os.PathLike, install_id: str, ad_hoc_sign: bool = True) -> None:
     """Set install id for library named in `filename`
 
     Parameters
@@ -223,7 +233,7 @@ def set_install_id(filename: str, install_id: str, ad_hoc_sign: bool = True):
 
     Raises
     ------
-    RuntimeError if `filename` has not install id
+    InstallNameError if `filename` has no install id
     """
     # install_name_tool -id
     macho = MachO(filename)
@@ -234,6 +244,69 @@ def set_install_id(filename: str, install_id: str, ad_hoc_sign: bool = True):
         header.rewriteDataForCommand(header.id_cmd, install_id.encode("utf-8"))
         changed = True
 
+    if not changed:
+        raise InstallNameError(f"{filename} has no install id")
+
+    with open(filename, "r+b") as f:
+        macho.write(f)
+
+    if ad_hoc_sign:
+        replace_signature(filename, "-")
+
+
+@ensure_writable
+def add_rpath(filename: str | os.PathLike, newpath: str, ad_hoc_sign: bool = True) -> None:
+    """Add rpath `newpath` to library `filename`."""
+    # install_name_tool -add_rpath
+    macho = MachO(filename)
+    hdrsize = sizeof(load_command) + sizeof(rpath_command)
+    path_bytes = newpath.encode("utf-8") + b"\x00"
+    newsize = round_to_multiple(hdrsize + len(path_bytes), 8)
+    data = path_bytes.ljust(newsize - hdrsize, b"\x00")
+
+    for header in macho.headers:
+        for entry in header.commands:
+            lc, cmd, _ = entry
+            if lc.cmd == LC_RPATH and lc_str_value(cmd.path, entry).decode("utf-8") == newpath:
+                raise InstallNameError(f"rpath {newpath!r} already exists in {filename}")
+        lc = load_command(cmd=LC_RPATH, cmdsize=newsize, _endian_=header.endian)
+        cmd = rpath_command(path=hdrsize, _endian_=header.endian)
+        header.commands.append((lc, cmd, data))
+        header.header.ncmds += 1
+        header.changedHeaderSizeBy(newsize)
+
+    with open(filename, "r+b") as f:
+        macho.write(f)
+
+    if ad_hoc_sign:
+        replace_signature(filename, "-")
+
+
+@ensure_writable
+def _delete_rpaths(filename: str | os.PathLike, rpaths: Iterable[str], ad_hoc_sign: bool = True) -> None:
+    """Remove `rpaths` from library `filename`."""
+    # install_name_tool -delete_rpath
+    rpaths_to_delete = set(rpaths)
+    if not rpaths_to_delete:
+        return
+
+    macho = MachO(filename)
+    changed = False
+    for header in macho.headers:
+        new_commands = []
+        removed_size = 0
+        for entry in header.commands:
+            lc, cmd, _ = entry
+            if lc.cmd == LC_RPATH and lc_str_value(cmd.path, entry).decode("utf-8") in rpaths_to_delete:
+                removed_size += lc.cmdsize
+                changed = True
+                continue
+            new_commands.append(entry)
+        if removed_size:
+            header.commands = new_commands
+            header.header.ncmds = len(new_commands)
+            header.changedHeaderSizeBy(-removed_size)
+
     if changed:
         with open(filename, "r+b") as f:
             macho.write(f)
@@ -242,7 +315,7 @@ def set_install_id(filename: str, install_id: str, ad_hoc_sign: bool = True):
             replace_signature(filename, "-")
 
 
-def get_archs(filename: str) -> frozenset[str]:
+def get_archs(filename: str | os.PathLike) -> frozenset[str]:
     """Return architecture types from library `libname`
 
     Parameters
@@ -269,7 +342,8 @@ def get_archs(filename: str) -> frozenset[str]:
     return frozenset(archs)
 
 
-def replace_signature(filename: str, identity: str) -> None:
+@ensure_writable
+def replace_signature(filename: str | os.PathLike, identity: str) -> None:
     """Replace the signature of a binary file using `identity`
 
     See the codesign documentation for more info

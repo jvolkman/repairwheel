@@ -29,6 +29,7 @@ from macholib.ptypes import p_uint32
 from macholib.ptypes import p_uint64
 from macholib.ptypes import sizeof
 
+from ..fileutil import ensure_writable
 from ..fileutil import fmove
 from ..fileutil import fzero
 from ..fileutil import open_create
@@ -44,6 +45,7 @@ from ..fileutil import round_to_multiple
 LOG = logging.getLogger(__name__)
 
 CODE_DIRECTORY_PAGE_SIZE = 4096  # Seems to be what Apple always uses
+CODE_SIGNATURE_ALIGNMENT = 16  # Apple's codesign_allocate aligns LC_CODE_SIGNATURE to 16 bytes
 SEGMENT_PAGE_SIZE = 16384  # ARM64 is 16384. AMD64 is actually 4096, but 16384 should work too.
 SHA256_HASH_SIZE = 32
 
@@ -190,7 +192,7 @@ class SuperBlob:
                 return self.pos
 
         counting = _CountingIO()
-        hashes = ("\0" * SHA256_HASH_SIZE for _ in range(self.page_count))
+        hashes = (b"\0" * SHA256_HASH_SIZE for _ in range(self.page_count))
         self.write(counting, hashes)
         return counting.tell()
 
@@ -246,7 +248,7 @@ class SuperBlob:
             execsegflags=CS_EXECSEG_MAIN_BINARY if self.is_executable else 0,
         )
 
-        if self.code_limit <= 2**32:
+        if self.code_limit < 2**32:
             dir.codelimit = self.code_limit
             dir.codelimit64 = 0
         else:
@@ -313,23 +315,18 @@ class FatInfo:
 
 
 @dataclasses.dataclass
-class SigInfo:
-    signature_bytes: bytes
-    hash_offset: int
-
-
-@dataclasses.dataclass
 class ArchInfo:
     signature_needed: bool = False
     original_offset: int = 0
     original_size: int = 0
+    payload_size: int = 0
     new_offset: int = 0
     new_size: int = 0
     new_linkedit_size: int = 0
     signature_command_index: int | None = None
-    super_blob: SuperBlob = None
-    code_signature_offset: int = None
-    code_signature_size: int = None
+    super_blob: SuperBlob | None = None
+    code_signature_offset: int | None = None
+    code_signature_size: int | None = None
 
 
 def _load_fat(fh: BinaryIO) -> FatInfo:
@@ -338,7 +335,7 @@ def _load_fat(fh: BinaryIO) -> FatInfo:
     if info.header.magic == FAT_MAGIC:
         info.archs = [fat_arch.from_fileobj(fh) for _ in range(info.header.nfat_arch)]
     elif info.header.magic == FAT_MAGIC_64:
-        info.archs = [fat_arch64.from_fileobj(fh) for _ in range(info.header.fat.nfat_arch)]
+        info.archs = [fat_arch64.from_fileobj(fh) for _ in range(info.header.nfat_arch)]
     else:
         raise ValueError(f"Unknown fat header magic: {info.header.magic!r}")
 
@@ -359,6 +356,7 @@ def _prepare_arch(header: MachOHeader, identifier: str) -> ArchInfo:
 
     # if we don't need to sign this one, we don't need to continue.
     if not info.signature_needed:
+        info.payload_size = header.size
         info.new_size = header.size
         return info
 
@@ -367,21 +365,19 @@ def _prepare_arch(header: MachOHeader, identifier: str) -> ArchInfo:
     last_linkedit_offset = 0
     exec_base = 0
     exec_limit = 0
-    original_linkedit_size = 0
+    linkedit_fileoff = 0
     original_linkedit_end = 0
-    original_signature_size = 0
     for i, (load, cmd, _) in enumerate(header.commands):
         if load.cmd in (LC_SEGMENT, LC_SEGMENT_64) and cmd.segname.rstrip(b"\0") == b"__TEXT":
             exec_base = cmd.fileoff
             exec_limit = cmd.filesize
 
         if load.cmd in (LC_SEGMENT, LC_SEGMENT_64) and cmd.segname.rstrip(b"\0") == b"__LINKEDIT":
-            original_linkedit_size = cmd.filesize
+            linkedit_fileoff = cmd.fileoff
             original_linkedit_end = cmd.fileoff + cmd.filesize
 
         elif load.cmd == LC_CODE_SIGNATURE:
             code_signature_offset = cmd.dataoff
-            original_signature_size = cmd.datasize
             info.signature_command_index = i
 
         if isinstance(cmd, linkedit_data_command):
@@ -391,8 +387,11 @@ def _prepare_arch(header: MachOHeader, identifier: str) -> ArchInfo:
     if code_signature_offset and code_signature_offset < last_linkedit_offset:
         raise SigningException("Code signature is not the last __LINKEDIT section; cannot modify")
 
-    info.code_signature_offset = code_signature_offset or original_linkedit_end
-    if not info.code_signature_offset:
+    if code_signature_offset:
+        info.code_signature_offset = code_signature_offset
+    elif original_linkedit_end:
+        info.code_signature_offset = round_to_multiple(original_linkedit_end, CODE_SIGNATURE_ALIGNMENT)
+    else:
         raise SigningException("Missing __LINKEDIT section; cannot add signature")
 
     if info.signature_command_index is None:
@@ -413,9 +412,10 @@ def _prepare_arch(header: MachOHeader, identifier: str) -> ArchInfo:
     )
 
     new_signature_size = info.super_blob.length
+    info.payload_size = min(header.size, info.code_signature_offset)
     info.code_signature_size = new_signature_size
-    info.new_linkedit_size = original_linkedit_size - original_signature_size + new_signature_size
     info.new_size = info.code_signature_offset + new_signature_size
+    info.new_linkedit_size = info.new_size - linkedit_fileoff
 
     return info
 
@@ -448,9 +448,15 @@ def _ad_hoc_sign(filename: str, fh: BinaryIO) -> None:
                 arch_infos[i - 1].new_offset + arch_infos[i - 1].new_size, align_bytes
             )
 
-        # Move each arch around, in reverse order
+        # Move slices shifting toward the beginning of the file in forward order,
+        # then slices shifting toward the end of the file in reverse order so
+        # no slice overwrites another slice's unmoved payload.
+        for arch in arch_infos:
+            if arch.new_offset < arch.original_offset:
+                fmove(fh, arch.new_offset, arch.original_offset, arch.payload_size)
         for arch in reversed(arch_infos):
-            fmove(fh, arch.new_offset, arch.original_offset, arch.new_size)
+            if arch.new_offset > arch.original_offset:
+                fmove(fh, arch.new_offset, arch.original_offset, arch.payload_size)
 
         # Zero out the spaces between archs
         for i in range(len(arch_infos) - 1):
@@ -471,6 +477,7 @@ def _ad_hoc_sign(filename: str, fh: BinaryIO) -> None:
 
     # Truncate the file to the new end of the last arch.
     fh.truncate(arch_infos[-1].new_offset + arch_infos[-1].new_size)
+    fh.flush()
 
     # Now with the fat structure possibly changed, we reload our mach headers.
     macho = MachO(filename)
@@ -486,7 +493,7 @@ def _ad_hoc_sign(filename: str, fh: BinaryIO) -> None:
                     cmd.vmsize = round_to_multiple(cmd.filesize, SEGMENT_PAGE_SIZE)
                 break
 
-        if arch.signature_command_index:
+        if arch.signature_command_index is not None:
             # Adjust the superblob length in the original LC_CODE_SIGNATURE command.
             _, cmd, _ = header.commands[arch.signature_command_index]
             cmd.datasize = arch.code_signature_size
@@ -512,6 +519,13 @@ def _ad_hoc_sign(filename: str, fh: BinaryIO) -> None:
         if not arch.signature_needed:
             continue
 
+        if arch.code_signature_offset > arch.payload_size:
+            fzero(
+                fh,
+                arch.new_offset + arch.payload_size,
+                arch.code_signature_offset - arch.payload_size,
+            )
+
         signature_offset = arch.new_offset + arch.code_signature_offset
         hashes = iterate_page_hashes(fh, arch.new_offset, signature_offset)
         fh.seek(signature_offset)
@@ -522,6 +536,7 @@ def _ad_hoc_sign(filename: str, fh: BinaryIO) -> None:
         fzero(fh, fh.tell(), zero_len)
 
 
+@ensure_writable
 def ad_hoc_sign(filename: str) -> None:
     with open(filename, "rb+", opener=open_create) as fh:
         _ad_hoc_sign(filename, fh)
