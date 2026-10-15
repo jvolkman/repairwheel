@@ -23,11 +23,11 @@ classifiers = [
 urls.homepage = "https://github.com/jvolkman/repairwheel"
 
 dependencies = [
-  "delvewheel >= 1.9.0",
+  "delvewheel >= 1.13.1",
   "macholib >= 1.16",
   "packaging >= 20.9",
   "pyelftools >= 0.24",
-  "pefile >= 2023.2.7",  # for delvewheel
+  "pefile >= 2024.8.26",  # for delvewheel
   "typing_extensions >= 4.12.2",
 ]
 

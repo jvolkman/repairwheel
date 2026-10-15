@@ -1,2 +1,2 @@
-auditwheel==6.8.1
+auditwheel==6.8.2
 git+https://github.com/jvolkman/delocate.git@4afc9992c501be6333948919d668b92454008497
