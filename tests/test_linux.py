@@ -11,6 +11,73 @@ from repairwheel.linux.repair import _detect_libc_and_musl_policy, _parse_platfo
 
 pytestmark = pytest.mark.skipif(sys.platform != "linux", reason="Linux-only tests")
 
+# GNU strip/objcopy (BFD) older than 2.44 mis-lay out PT_LOAD segments that contain
+# the PHDR table when it isn't at the start of the file, corrupting valid ELF files.
+# See https://sourceware.org/bugzilla/show_bug.cgi?id=32946.
+MIN_GNU_STRIP_VERSION = (2, 44)
+# llvm-strip 18 breaks p_offset/p_vaddr congruence for a PT_LOAD that shares its
+# offset with PT_PHDR (executables); 19+ handles it.
+MIN_LLVM_STRIP_VERSION = (19,)
+
+
+def _tool_version(path: str, marker: str) -> tuple[int, ...] | None:
+    """Parse the version from `path --version` if its output contains `marker`."""
+    import re
+    import subprocess
+
+    out = subprocess.run([path, "--version"], capture_output=True, text=True).stdout
+    if marker not in out:
+        return None
+    pattern = r"GNU strip.*?(\d+)\.(\d+)" if marker == "GNU strip" else r"LLVM version (\d+)\.(\d+)"
+    match = re.search(pattern, out)
+    return tuple(int(g) for g in match.groups()) if match else None
+
+
+def _find_llvm_strip() -> tuple[str, tuple[int, ...]] | None:
+    """Return the newest llvm-strip on PATH, including versioned names like llvm-strip-20."""
+    import glob
+    import os
+    import shutil
+
+    paths = {p for p in [shutil.which("llvm-strip")] if p}
+    for d in os.environ.get("PATH", "").split(os.pathsep):
+        paths.update(p for p in glob.glob(os.path.join(d, "llvm-strip-[0-9]*")) if os.access(p, os.X_OK))
+    found = [(v, p) for p in paths if (v := _tool_version(p, "LLVM version"))]
+    return (max(found)[1], max(found)[0]) if found else None
+
+
+@pytest.fixture(params=["gnu", "llvm"])
+def strip_tool(request) -> str:
+    """Path to a strip implementation that handles spec-valid relocated PHDR tables.
+
+    Tool paths can be overridden with REPAIRWHEEL_TEST_GNU_STRIP / REPAIRWHEEL_TEST_LLVM_STRIP.
+    If REPAIRWHEEL_TEST_REQUIRE_STRIP is set, a missing or too-old tool fails instead of skipping.
+    """
+    import os
+    import shutil
+
+    if request.param == "gnu":
+        name, minimum, note = "GNU strip", MIN_GNU_STRIP_VERSION, " (binutils bug 32946)"
+        path = os.environ.get("REPAIRWHEEL_TEST_GNU_STRIP") or shutil.which("strip")
+        version = _tool_version(path, "GNU strip") if path else None
+    else:
+        name, minimum, note = "llvm-strip", MIN_LLVM_STRIP_VERSION, ""
+        path = os.environ.get("REPAIRWHEEL_TEST_LLVM_STRIP")
+        version = _tool_version(path, "LLVM version") if path else None
+        if not path and (found := _find_llvm_strip()):
+            path, version = found
+
+    if version is None:
+        reason = f"{name} not found"
+    elif version < minimum:
+        reason = f"{name} {'.'.join(map(str, version))} < {'.'.join(map(str, minimum))}{note}"
+    else:
+        return path
+
+    if os.environ.get("REPAIRWHEEL_TEST_REQUIRE_STRIP"):
+        pytest.fail(reason)
+    pytest.skip(reason)
+
 
 class TestPatchLoadLdPaths:
     """Verify the load_ld_paths monkeypatch matches auditwheel's expected signature."""
@@ -502,3 +569,115 @@ class TestElfFileAndPatcher:
         )
         res2 = subprocess.run([sys.executable, "-c", check_code_both], capture_output=True, text=True)
         assert res2.returncode == 0, f"Loading patched ELF after second removal failed (rc={res2.returncode}): {res2.stderr}"
+
+    def test_strip_patched_elf_shared_lib_and_executables(self, tmp_path: Path, strip_tool: str):
+        import shutil
+        import subprocess
+        from repairwheel.linux.elffile import ElfFile
+
+        cc = shutil.which("cc") or shutil.which("gcc")
+        strip = strip_tool
+        if not cc:
+            pytest.skip("cc required for ELF strip test")
+
+        # Include enough symbols/debug info so non-alloc sections exceed a 4KB page
+        funcs = "\n".join(f"int helper_symbol_{i}(int x) {{ return x + {i}; }}" for i in range(150))
+        (tmp_path / "foo.c").write_text(funcs + "\nint foo(void) { return 42; }\n")
+        (tmp_path / "main.c").write_text(
+            "#include <stdio.h>\n"
+            + funcs
+            + '\nint foo(void);\nint main(void) { printf("%d\\n", foo()); return foo() == 42 ? 0 : 1; }\n'
+        )
+
+        libfoo = tmp_path / "libfoo.so"
+        subprocess.check_call([cc, "-shared", "-fPIC", "-g", str(tmp_path / "foo.c"), "-o", str(libfoo)])
+
+        with open(libfoo, "r+b") as fh:
+            ef = ElfFile(fh)
+            ef.rewrite(new_soname=b"libfoo.so", new_rpath=b"$ORIGIN")
+            last_load = ef._get_last_load_segment()
+            dyn_shdr = ef.get_shdr(b".dynamic")
+            assert last_load is not None
+            # Trailer PT_LOAD ends at .dynamic and excludes the unmapped shdr table
+            assert last_load.p_offset + last_load.p_filesz == dyn_shdr.sh_offset + dyn_shdr.sh_size
+            assert ef.ehdr.e_shoff >= last_load.p_offset + last_load.p_filesz
+            pre_strip_filesz = last_load.p_filesz
+            lib_phnum = len(ef.phdrs)
+            lib_load_count = sum(1 for p in ef.phdrs if p.p_type == 1)
+
+        strip_lib = subprocess.run([strip, str(libfoo)], capture_output=True, text=True, check=True)
+        assert strip_lib.stderr == ""
+        with open(libfoo, "r+b") as fh:
+            ef = ElfFile(fh)
+            stripped_last_load = ef._get_last_load_segment()
+            assert stripped_last_load is not None
+            assert stripped_last_load.p_filesz == pre_strip_filesz
+            # Re-patching after strip reuses the trailer PT_LOAD slot via exact byte match
+            ef.rewrite(new_soname=b"libfoo.so", new_rpath=b"$ORIGIN/lib")
+            assert len(ef.phdrs) == lib_phnum
+            assert sum(1 for p in ef.phdrs if p.p_type == 1) == lib_load_count
+
+        lib_bytes_after_repatch = libfoo.read_bytes()
+        with open(libfoo, "r+b") as fh:
+            ef = ElfFile(fh)
+            ef.rewrite(new_soname=b"libfoo.so", new_rpath=b"$ORIGIN/lib")
+        assert libfoo.read_bytes() == lib_bytes_after_repatch
+
+        strip_lib2 = subprocess.run([strip, str(libfoo)], capture_output=True, text=True, check=True)
+        assert strip_lib2.stderr == ""
+        load_res = subprocess.run(
+            [sys.executable, "-c", f"import ctypes; lib = ctypes.CDLL({str(libfoo)!r}); assert lib.foo() == 42"],
+            capture_output=True,
+            text=True,
+        )
+        assert load_res.returncode == 0, f"Stripped libfoo.so failed to load (rc={load_res.returncode}): {load_res.stderr}"
+
+        for label, link_flags in [("pie", ["-g"]), ("nopie", ["-no-pie", "-g"])]:
+            exe_base = tmp_path / f"main_{label}"
+            subprocess.check_call([cc, *link_flags, str(tmp_path / "main.c"), f"-L{tmp_path}", "-lfoo", "-o", str(exe_base)])
+
+            # Test multiple rewrites followed by various strip modes
+            for strip_args in [[], ["-s"], ["--strip-debug"], ["--strip-unneeded"]]:
+                exe = tmp_path / f"main_{label}_{'_'.join(strip_args) or 'default'}"
+                shutil.copy(exe_base, exe)
+                with open(exe, "r+b") as fh:
+                    ef = ElfFile(fh)
+                    ef.rewrite(new_soname=b"long_placeholder_soname_value")
+                    ef.rewrite(new_rpath=b"$ORIGIN")
+                    ef.rewrite(new_soname=b"short")
+                strip_res = subprocess.run([strip, *strip_args, str(exe)], capture_output=True, text=True, check=True)
+                assert strip_res.stderr == ""
+                run_res = subprocess.run([str(exe)], capture_output=True, text=True)
+                assert run_res.returncode == 0 and run_res.stdout.strip() == "42"
+
+            # Test repeated (rewrite -> strip) cycles to ensure no empty PT_LOAD segment is left behind
+            exe_cycle = tmp_path / f"main_{label}_cycle"
+            shutil.copy(exe_base, exe_cycle)
+            expected_phnum = None
+            expected_load_count = None
+            for i in range(3):
+                with open(exe_cycle, "r+b") as fh:
+                    ef = ElfFile(fh)
+                    ef.rewrite(new_rpath=f"$ORIGIN:{i}".encode())
+                    cur_phnum = len(ef.phdrs)
+                    cur_load_count = sum(1 for p in ef.phdrs if p.p_type == 1)  # PT_LOAD
+                if expected_phnum is None:
+                    expected_phnum = cur_phnum
+                    expected_load_count = cur_load_count
+                else:
+                    assert cur_phnum == expected_phnum
+                    assert cur_load_count == expected_load_count
+
+                # Second rewrite with same args must be byte-identical (post-strip idempotency)
+                bytes_after_first_rewrite = exe_cycle.read_bytes()
+                with open(exe_cycle, "r+b") as fh:
+                    ef = ElfFile(fh)
+                    ef.rewrite(new_rpath=f"$ORIGIN:{i}".encode())
+                assert exe_cycle.read_bytes() == bytes_after_first_rewrite
+
+                run_pre = subprocess.run([str(exe_cycle)], capture_output=True, text=True)
+                assert run_pre.returncode == 0 and run_pre.stdout.strip() == "42"
+                strip_cycle = subprocess.run([strip, str(exe_cycle)], capture_output=True, text=True, check=True)
+                assert strip_cycle.stderr == ""
+                run_post = subprocess.run([str(exe_cycle)], capture_output=True, text=True)
+                assert run_post.returncode == 0 and run_post.stdout.strip() == "42"
