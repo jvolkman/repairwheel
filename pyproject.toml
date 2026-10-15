@@ -100,7 +100,6 @@ python = ["3.11", "3.12", "3.13", "3.14", "3.15"]
 
 [tool.hatch.envs.test.scripts]
 test = "pytest -v tests/ --ignore tests/gen_check/"
-smoke = "pytest -v tests/test_common.py"
 generate = "pytest -v tests/gen_check/test_generate.py"
 check = "pytest -v tests/gen_check/test_check.py"
 

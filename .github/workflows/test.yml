@@ -13,31 +13,6 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  smoke-test:
-    name: Smoke tests - Python ${{ matrix.python-version }}
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ["3.11", "3.12", "3.13", "3.14", "3.15"]
-
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v7
-        with:
-          python-version: ${{ matrix.python-version }}
-
-      - name: Ensure latest pip
-        run: python -m pip install --break-system-packages --upgrade pip
-
-      - name: Install Hatch
-        run: python -m pip install --break-system-packages hatch
-
-      - name: Run smoke tests
-        run: hatch env run -e test.py${{ matrix.python-version }} smoke
-
   matrix-test:
     name: Unit tests - Python ${{ matrix.python-version }} on ${{ matrix.platform }}
     runs-on: ${{ matrix.platform == 'alpine' && 'ubuntu-latest' || format('{0}-latest', matrix.platform) }}
@@ -46,7 +21,12 @@ jobs:
       fail-fast: false
       matrix:
         platform: [ubuntu, windows, macos, alpine]
-        python-version: ["3.12"]
+        python-version: ["3.11", "3.12", "3.13", "3.14", "3.15"]
+        exclude:
+          # Hatch's standalone Python 3.15 uses glibc's dladdr1, which is not
+          # provided by musl/gcompat on Alpine.
+          - platform: alpine
+            python-version: "3.15"
 
     steps:
       - uses: actions/checkout@v7
