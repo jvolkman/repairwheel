@@ -71,8 +71,6 @@ PF_X = 0x1
 SHT_STRTAB = 3
 SHT_DYNAMIC = 6
 
-SHF_ALLOC = 0x2
-
 SHN_LORESERVE = 0xFF00
 SHN_XINDEX = 0xFFFF
 PN_XNUM = 0xFFFF
@@ -1127,13 +1125,18 @@ class ElfFile:
             buf, pos, new_dynstr, new_soname, new_rpath, new_needed_names, dynstr_pos, verneed_pos
         )
 
-        # shdrs
-        phdr_count = len(self.phdrs) + (1 if add_new_load else 0)
-        shdr_pos = self._write_shdrs(buf, pos, dynstr_pos, dynamic_pos, verneed_pos, phdr_count)
-
-        # phdrs
+        # Finalize phdrs at the start of PT_LOAD before writing shdrs so that
+        # PT_LOAD.p_filesz and p_memsz cover only the loaded content
+        # (phdrs, .dynstr, .gnu.version_r, .dynamic) and exclude the unmapped shdrs.
+        load_end_file_offset = pos.file_offset
+        load_end_vm_offset = pos.vm_offset
         pos.back_to_start()
         phdr_pos = self._write_phdrs(buf, pos, dynamic_pos, add_new_load)
+        pos.file_offset = load_end_file_offset
+        pos.vm_offset = load_end_vm_offset
+
+        # shdrs (written after PT_LOAD)
+        shdr_pos = self._write_shdrs(buf, pos, dynstr_pos, dynamic_pos, verneed_pos, phdr_pos.count)
 
         return phdr_pos, shdr_pos, dynamic_pos
 
@@ -1209,68 +1212,45 @@ class ElfFile:
                     last_load = phdr
         return last_load
 
-    def _can_overwrite_last_load(self, last_load_header: Elf_Phdr) -> bool:
-        with self._peek() as fh:
-            fh.seek(last_load_header.p_offset)
-            last_load_data = fh.read(last_load_header.p_filesz)
-            read_end = fh.tell()
-            fh.seek(0, io.SEEK_END)
-            file_end = fh.tell()
+    def _match_last_load(self, last_load_header: Elf_Phdr) -> tuple[bool, bool]:
+        """Checks whether last_load_header was written by a previous ElfFile.rewrite.
 
-        # Return false if this isn't the last data in the file
-        if read_end != file_end:
-            return False
-
-        # Generate the LOAD segment that we'd expect with the current values, and
-        # compare against what actually exists.
-        new_load_data = io.BytesIO()
-        self._write_new_trailer(
-            buf=new_load_data,
+        Returns (can_overwrite_in_place, is_existing_trailer):
+        - (True, True): file[last_load_header.p_offset : EOF] matches the full
+          regenerated trailer (PT_LOAD + shdrs), so we can overwrite it in place.
+        - (False, True): file[last_load_header.p_offset : +p_filesz] matches the
+          PT_LOAD portion of the regenerated trailer (e.g. `strip` placed `.shstrtab`
+          and rebuilt `shdrs` after our PT_LOAD), so we reuse last_load_header's
+          Phdr entry and write the new trailer at aligned EOF.
+        - (False, False): last_load_header is not our trailer, so we append a new
+          PT_LOAD segment at aligned EOF.
+        """
+        expected_buf = io.BytesIO()
+        _, _, dynamic_pos = self._write_new_trailer(
+            buf=expected_buf,
             file_offset=last_load_header.p_offset,
             vm_offset=last_load_header.p_vaddr,
             add_new_load=False,
         )
-        return new_load_data.getvalue() == last_load_data
+        expected_trailer = expected_buf.getvalue()
+        expected_load_size = (dynamic_pos.file_offset + dynamic_pos.length) - last_load_header.p_offset
+        if last_load_header.p_filesz != expected_load_size:
+            return False, False
 
-    def _last_load_only_has_relocated_sections(self, last_load_header: Elf_Phdr) -> bool:
-        """Returns True if last_load_header is a previously relocated trailer PT_LOAD
-        segment containing only the PHDRs and/or sections relocated by _write_new_trailer
-        (.dynstr, .gnu.version_r, .dynamic).
+        with self._peek() as fh:
+            fh.seek(0, io.SEEK_END)
+            file_end = fh.tell()
+            fh.seek(last_load_header.p_offset)
+            if file_end - last_load_header.p_offset == len(expected_trailer):
+                existing = fh.read(len(expected_trailer))
+                if existing == expected_trailer:
+                    return True, True
+            else:
+                existing = fh.read(expected_load_size)
 
-        When a previously patched binary is stripped (which appends .shstrtab/shdrs
-        after last_load_header) and then patched again, _can_overwrite_last_load
-        returns False. Reusing last_load_header's Phdr entry in that case avoids
-        leaving behind an empty PT_LOAD segment that a subsequent `strip` would
-        delete from the PHDR table (shrinking e_phnum and misaligning the segment).
-        """
-        contains_phdrs = last_load_header.p_offset <= self.ehdr.e_phoff < last_load_header.p_offset + last_load_header.p_filesz
-        contains_dynstr = False
-
-        relocated = {b".dynstr", b".gnu.version_r", b".dynamic"}
-        for shdr, name in zip(self.shdrs, self.shdr_names, strict=False):
-            if not (shdr.sh_flags & SHF_ALLOC):
-                continue
-            in_vaddr = last_load_header.p_vaddr <= shdr.sh_addr < last_load_header.p_vaddr + last_load_header.p_memsz
-            in_offset = last_load_header.p_offset <= shdr.sh_offset < last_load_header.p_offset + last_load_header.p_filesz
-            if not (in_vaddr or in_offset):
-                continue
-            if name not in relocated:
-                return False
-            contains_dynstr |= name == b".dynstr"
-
-        if not (contains_phdrs or contains_dynstr):
-            return False
-
-        for phdr in self.phdrs:
-            if phdr is last_load_header or phdr.p_type in (PT_LOAD, PT_DYNAMIC, PT_PHDR) or phdr.p_memsz == 0:
-                continue
-            if (
-                phdr.p_vaddr < last_load_header.p_vaddr + last_load_header.p_memsz
-                and phdr.p_vaddr + phdr.p_memsz > last_load_header.p_vaddr
-            ):
-                return False
-
-        return True
+        if existing[:expected_load_size] == expected_trailer[:expected_load_size]:
+            return False, True
+        return False, False
 
     def rewrite(
         self,
@@ -1292,7 +1272,8 @@ class ElfFile:
         last_load_header = self._get_last_load_segment()
         assert last_load_header, "File has no LOAD segments!"
 
-        if self._can_overwrite_last_load(last_load_header):
+        can_overwrite_in_place, is_existing_trailer = self._match_last_load(last_load_header)
+        if can_overwrite_in_place:
             new_offset = last_load_header.p_offset
             new_vm_offset = last_load_header.p_vaddr
             add_new_load = False
@@ -1303,7 +1284,7 @@ class ElfFile:
             new_offset = round_to_multiple(file_end, page_size)
             # Then make our vm addr match
             new_vm_offset = congruent_vm_addr(new_offset, vm_max, page_size)
-            add_new_load = not self._last_load_only_has_relocated_sections(last_load_header)
+            add_new_load = not is_existing_trailer
             pad_from_end = True
 
         buf = io.BytesIO()
