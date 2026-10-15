@@ -1,5 +1,5 @@
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling", "hatch-vcs"]
 build-backend = "hatchling.build"
 
 [project]
@@ -77,7 +77,8 @@ known-first-party = ["build"]
 [tool.hatch]
 
 [tool.hatch.version]
-path="src/repairwheel/__init__.py"
+source = "vcs"
+fallback-version = "0.0.0"
 
 [tool.hatch.build.targets.sdist]
 exclude = [
