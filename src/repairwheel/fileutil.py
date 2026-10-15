@@ -3,9 +3,10 @@ from contextlib import contextmanager
 import functools
 import os
 import stat
-from typing import Any, BinaryIO, IO
+from typing import Any, BinaryIO, IO, TypeVar
 
 BUFSIZE = 8192
+F = TypeVar("F", bound=Callable[..., Any])
 
 
 def open_create(name: str, flags: int) -> IO:
@@ -25,7 +26,7 @@ def writable_file(path: str | os.PathLike) -> Generator[None, None, None]:
         yield
 
 
-def ensure_writable[F: Callable[..., Any]](fn: F) -> F:
+def ensure_writable(fn: F) -> F:
     @functools.wraps(fn)
     def wrapper(filename: str | os.PathLike, *args: Any, **kwargs: Any) -> Any:
         with writable_file(filename):
