@@ -6,7 +6,7 @@ import sys
 import tempfile
 import shutil
 import zipfile
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -51,7 +51,7 @@ def test_repaired_wheel_has_proper_tag(patched_wheel: Path) -> None:
 
 
 def test_source_date_epoch(orig_py3_none_any_wheel: TestWheel) -> None:
-    expected_zip_time = datetime.fromtimestamp(TEST_SOURCE_DATE_EPOCH, timezone.utc).timetuple()[:6]
+    expected_zip_time = datetime.fromtimestamp(TEST_SOURCE_DATE_EPOCH, UTC).timetuple()[:6]
     with tempfile.TemporaryDirectory(prefix="testwheel") as temp_dir:
         temp_dir = Path(temp_dir)
         patched_wheel = get_patched_wheel(
