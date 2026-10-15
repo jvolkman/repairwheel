@@ -86,7 +86,7 @@ def main():
     if "SOURCE_DATE_EPOCH" in os.environ:
         try:
             epoch = int(os.environ["SOURCE_DATE_EPOCH"])
-            mtime = datetime.datetime.fromtimestamp(epoch, datetime.timezone.utc)
+            mtime = datetime.datetime.fromtimestamp(epoch, datetime.UTC)
         except ValueError:
             fatal(f"SOURCE_DATE_EPOCH value cannot be parsed as a number: {os.environ['SOURCE_DATE_EPOCH']}")
     else:
