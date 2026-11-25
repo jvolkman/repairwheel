@@ -1280,10 +1280,14 @@ class ElfFile:
             pad_from_end = False
         else:
             vm_max = last_load_header.p_vaddr + last_load_header.p_memsz
-            # Our first section will be the PHDRs which are aligned to Elf_Off.
-            new_offset = round_to_multiple(file_end, page_size)
-            # Then make our vm addr match
-            new_vm_offset = congruent_vm_addr(new_offset, vm_max, page_size)
+            # ELF only requires p_vaddr == p_offset (mod p_align), not that
+            # p_offset itself be a multiple of p_align. Aligning the file offset
+            # to 4 KiB avoids padding small libraries out to a 2 MiB segment
+            # alignment (as on RHEL/manylinux_2_28). Rounding vm_max up to
+            # page_size first keeps the new segment in a disjoint virtual
+            # window for any runtime page size <= p_align.
+            new_offset = round_to_multiple(file_end, 0x1000)
+            new_vm_offset = congruent_vm_addr(new_offset, round_to_multiple(vm_max, page_size), page_size)
             add_new_load = not is_existing_trailer
             pad_from_end = True
 

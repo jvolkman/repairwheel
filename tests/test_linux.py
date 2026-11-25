@@ -681,3 +681,112 @@ class TestElfFileAndPatcher:
                 assert strip_cycle.stderr == ""
                 run_post = subprocess.run([str(exe_cycle)], capture_output=True, text=True)
                 assert run_post.returncode == 0 and run_post.stdout.strip() == "42"
+
+    def test_elffile_large_segment_alignment_no_bloat(self, tmp_path: Path):
+        """Rewriting a small library with 2 MiB p_align must not pad it to 2 MiB."""
+        import shutil
+        import subprocess
+        from repairwheel.fileutil import round_to_multiple
+        from repairwheel.linux.elffile import ElfFile
+
+        cc = shutil.which("cc") or shutil.which("gcc")
+        if not cc:
+            pytest.skip("cc required for large segment alignment test")
+
+        (tmp_path / "small.c").write_text("int foo(void) { return 42; }\n")
+        lib = tmp_path / "libsmall.so"
+        subprocess.check_call(
+            [
+                cc,
+                "-shared",
+                "-fPIC",
+                "-Wl,-soname,libsmall.so.1",
+                "-Wl,-z,noseparate-code,-z,norelro,-z,max-page-size=0x200000",
+                str(tmp_path / "small.c"),
+                "-o",
+                str(lib),
+            ]
+        )
+
+        orig_size = lib.stat().st_size
+        assert orig_size < 0x100000
+
+        with open(lib, "r+b") as fh:
+            ef = ElfFile(fh)
+            assert ef.guess_page_size() == 0x200000
+            prev_load = ef._get_last_load_segment()
+            assert prev_load is not None
+            prev_vm_max = prev_load.p_vaddr + prev_load.p_memsz
+
+            ef.rewrite(new_soname=b"libsmall-abcdef12.so.1", new_rpath=b"$ORIGIN")
+
+            new_load = ef._get_last_load_segment()
+            assert new_load is not None
+            assert new_load.p_align == 0x200000
+            assert new_load.p_offset % 0x1000 == 0
+            assert new_load.p_vaddr % new_load.p_align == new_load.p_offset % new_load.p_align
+            assert new_load.p_vaddr >= round_to_multiple(prev_vm_max, new_load.p_align)
+
+        patched_size = lib.stat().st_size
+        assert patched_size - orig_size < 0x10000
+
+        # Second rewrite with the same arguments must remain byte-identical.
+        patched_bytes = lib.read_bytes()
+        with open(lib, "r+b") as fh:
+            ElfFile(fh).rewrite(new_soname=b"libsmall-abcdef12.so.1", new_rpath=b"$ORIGIN")
+        assert lib.read_bytes() == patched_bytes
+
+        load_res = subprocess.run(
+            [sys.executable, "-c", f"import ctypes; assert ctypes.CDLL({str(lib)!r}).foo() == 42"],
+            capture_output=True,
+            text=True,
+        )
+        assert load_res.returncode == 0, f"Loading patched lib failed (rc={load_res.returncode}): {load_res.stderr}"
+
+    def test_strip_patched_elf_large_segment_alignment(self, tmp_path: Path, strip_tool: str):
+        """Stripping and re-patching a 2 MiB-aligned library must preserve loadability and compact size."""
+        import shutil
+        import subprocess
+        from repairwheel.linux.elffile import ElfFile
+
+        cc = shutil.which("cc") or shutil.which("gcc")
+        if not cc:
+            pytest.skip("cc required for large segment alignment strip test")
+
+        (tmp_path / "small.c").write_text("int foo(void) { return 42; }\n")
+        lib = tmp_path / "libsmall.so"
+        subprocess.check_call(
+            [
+                cc,
+                "-shared",
+                "-fPIC",
+                "-g",
+                "-Wl,-soname,libsmall.so.1",
+                "-Wl,-z,noseparate-code,-z,norelro,-z,max-page-size=0x200000",
+                str(tmp_path / "small.c"),
+                "-o",
+                str(lib),
+            ]
+        )
+
+        with open(lib, "r+b") as fh:
+            ef = ElfFile(fh)
+            ef.rewrite(new_soname=b"libsmall-abcdef12.so.1", new_rpath=b"$ORIGIN")
+            phnum = len(ef.phdrs)
+
+        strip_res = subprocess.run([strip_tool, str(lib)], capture_output=True, text=True, check=True)
+        assert strip_res.stderr == ""
+        assert lib.stat().st_size < 0x100000
+
+        with open(lib, "r+b") as fh:
+            ef = ElfFile(fh)
+            ef.rewrite(new_soname=b"libsmall-abcdef12.so.1", new_rpath=b"$ORIGIN/lib")
+            assert len(ef.phdrs) == phnum
+
+        assert lib.stat().st_size < 0x100000
+        load_res = subprocess.run(
+            [sys.executable, "-c", f"import ctypes; assert ctypes.CDLL({str(lib)!r}).foo() == 42"],
+            capture_output=True,
+            text=True,
+        )
+        assert load_res.returncode == 0, f"Loading stripped lib failed (rc={load_res.returncode}): {load_res.stderr}"
